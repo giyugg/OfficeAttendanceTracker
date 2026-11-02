@@ -1,0 +1,11 @@
+/target/
+/.tools/
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.log
+/.idea/
+*.iml
+/.vscode/
