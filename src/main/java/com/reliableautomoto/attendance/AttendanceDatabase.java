@@ -328,6 +328,59 @@ public final class AttendanceDatabase {
         }
     }
 
+    AttendanceRecord addManualAttendance(String rawNumber, Instant timeIn, Instant timeOut) throws SQLException {
+        String number = EmployeeNumbers.normalize(rawNumber);
+        if (timeIn == null || timeOut == null || !timeOut.isAfter(timeIn)) {
+            throw new IllegalArgumentException("Time-out must be later than time-in.");
+        }
+        try (Connection connection = connect(); Statement transaction = connection.createStatement()) {
+            transaction.execute("BEGIN IMMEDIATE");
+            try {
+                String name;
+                try (PreparedStatement employee = connection.prepareStatement(
+                        "SELECT full_name FROM employees WHERE employee_number = ?")) {
+                    employee.setString(1, number);
+                    try (ResultSet row = employee.executeQuery()) {
+                        if (!row.next()) throw new IllegalArgumentException("Employee number not found.");
+                        name = row.getString(1);
+                    }
+                }
+                try (PreparedStatement overlap = connection.prepareStatement("""
+                        SELECT 1 FROM attendance
+                        WHERE employee_number = ? AND time_in < ? AND COALESCE(time_out, 9223372036854775807) > ?
+                        LIMIT 1
+                        """)) {
+                    overlap.setString(1, number);
+                    overlap.setLong(2, timeOut.toEpochMilli());
+                    overlap.setLong(3, timeIn.toEpochMilli());
+                    try (ResultSet row = overlap.executeQuery()) {
+                        if (row.next()) throw new IllegalArgumentException(
+                                "This attendance overlaps an existing shift for the employee.");
+                    }
+                }
+                long id;
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "INSERT INTO attendance(employee_number, time_in, time_out) VALUES (?, ?, ?)",
+                        Statement.RETURN_GENERATED_KEYS)) {
+                    insert.setString(1, number);
+                    insert.setLong(2, timeIn.toEpochMilli());
+                    insert.setLong(3, timeOut.toEpochMilli());
+                    insert.executeUpdate();
+                    try (ResultSet keys = insert.getGeneratedKeys()) {
+                        if (!keys.next()) throw new SQLException("Attendance was saved without an identifier.");
+                        id = keys.getLong(1);
+                    }
+                }
+                transaction.execute("COMMIT");
+                return new AttendanceRecord(id, number, name, timeIn, timeOut);
+            } catch (SQLException | RuntimeException error) {
+                try { transaction.execute("ROLLBACK"); }
+                catch (SQLException rollbackError) { error.addSuppressed(rollbackError); }
+                throw error;
+            }
+        }
+    }
+
     private ScanResult recordInTransaction(Connection connection, String number, Instant now, Duration cooldown) throws SQLException {
         String name;
         try (PreparedStatement statement = connection.prepareStatement("SELECT full_name, active FROM employees WHERE employee_number = ?")) {

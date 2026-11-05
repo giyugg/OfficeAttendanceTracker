@@ -38,16 +38,39 @@ class AttendanceFrameTest {
             await(() -> hasLabel(adminReference.get(), loaded) && hasLabel(attendanceReference.get(), loaded));
             JTabbedPane adminTabs = onEdt(() -> components(adminReference.get(), JTabbedPane.class).getFirst());
             JTabbedPane attendanceTabs = onEdt(() -> components(attendanceReference.get(), JTabbedPane.class).getFirst());
-            assertEquals(4, adminTabs.getTabCount());
+            assertEquals(6, adminTabs.getTabCount());
             assertEquals("  Employees  ", adminTabs.getTitleAt(1));
-            assertEquals("  Holidays  ", adminTabs.getTitleAt(2));
-            assertEquals("  Payroll  ", adminTabs.getTitleAt(3));
+            assertEquals("  Employee summary  ", adminTabs.getTitleAt(2));
+            assertEquals("  Date summary  ", adminTabs.getTitleAt(3));
+            assertEquals("  Holidays  ", adminTabs.getTitleAt(4));
+            assertEquals("  Payroll  ", adminTabs.getTitleAt(5));
             assertEquals(1, attendanceTabs.getTabCount());
             assertEquals("  Attendance station  ", attendanceTabs.getTitleAt(0));
             assertTrue(components(adminReference.get(), JButton.class).stream()
                     .anyMatch(button -> "Change passwords".equals(button.getText())));
             assertFalse(components(attendanceReference.get(), JButton.class).stream()
                     .anyMatch(button -> "Change passwords".equals(button.getText())));
+            assertEquals(2, components(adminReference.get(), JButton.class).stream()
+                    .filter(button -> "Add past attendance".equals(button.getText())).count());
+            assertFalse(components(attendanceReference.get(), JButton.class).stream()
+                    .anyMatch(button -> "Add past attendance".equals(button.getText())));
+            JComboBox<?> employeeChoice = components(adminReference.get(), JComboBox.class).stream()
+                    .filter(combo -> combo.getItemCount() > 0
+                            && "-- SELECT AN EMPLOYEE --".equals(combo.getItemAt(0).toString()))
+                    .findFirst().orElseThrow();
+            assertEquals("-- SELECT AN EMPLOYEE --", employeeChoice.getSelectedItem().toString());
+            JTable summary = components(adminReference.get(), JTable.class).stream()
+                    .filter(table -> hasColumn(table, "Hours present") && !hasColumn(table, "Employee name"))
+                    .findFirst().orElseThrow();
+            assertEquals(5, summary.getColumnCount());
+            assertFalse(hasColumn(summary, "Employee name"));
+            assertFalse(hasColumn(summary, "Employee #"));
+            assertEquals(0, summary.getRowCount());
+            JTable dateSummary = components(adminReference.get(), JTable.class).stream()
+                    .filter(table -> hasColumn(table, "Hours present") && hasColumn(table, "Employee name"))
+                    .findFirst().orElseThrow();
+            assertEquals(6, dateSummary.getColumnCount());
+            assertTrue(hasColumn(dateSummary, "Employee #"));
         } finally {
             SwingUtilities.invokeAndWait(() -> {
                 adminReference.get().dispose();
@@ -82,7 +105,7 @@ class AttendanceFrameTest {
                     .filter(field -> field.getToolTipText() != null && field.getToolTipText().startsWith("Click here"))
                     .findFirst().orElseThrow());
             JTable history = onEdt(() -> components(frame, JTable.class).stream()
-                    .filter(table -> table.getColumnCount() == 6).findFirst().orElseThrow());
+                    .filter(table -> hasColumn(table, "Duration")).findFirst().orElseThrow());
             submit(input, "00042");
             await(() -> hasLabel(frame, "Time-in successful") && history.getRowCount() == 1
                     && "IN".equals(history.getValueAt(0, 5)));
@@ -136,6 +159,13 @@ class AttendanceFrameTest {
 
     private static boolean hasLabel(Container parent, String value) {
         return components(parent, JLabel.class).stream().anyMatch(label -> value.equals(label.getText()));
+    }
+
+    private static boolean hasColumn(JTable table, String name) {
+        for (int column = 0; column < table.getColumnCount(); column++) {
+            if (name.equals(table.getColumnName(column))) return true;
+        }
+        return false;
     }
 
     private static <T extends Component> List<T> components(Container parent, Class<T> type) {
