@@ -5,37 +5,22 @@ A Java desktop application that reads an **existing QR code containing only an e
 ## Run on Windows
 
 1. Install **Java 21 or newer**. A JDK is required to build from source; a Java runtime is enough for the packaged JAR.
-2. Double-click **`start.cmd`** in this folder. It builds the application if the JAR is missing. The first build needs internet access; Maven is downloaded automatically.
-3. Sign in as **`admin`** (the initial password is `admin`), then open **Employees → Add employee**. Enter the employee number exactly as encoded in the existing QR code and enter their name. The database starts empty.
-4. Return to **Attendance station** and choose an input method, or log in as **`attendance`** (the initial password is `attendance`) to open only this station:
+2. Double-click **`start.cmd`**. It builds the application if the JAR is missing. The first build needs internet access; Maven is downloaded automatically.
+3. Sign in as **`admin`** (the initial password is `admin`), then open **Employees → Add employee**. Enter the employee number exactly as encoded in the existing QR code, the employee's name, and pay per day. The database starts empty.
+4. Return to **Attendance station**, or sign in as **`attendance`** (the initial password is `attendance`) to open only this station, then choose an input method:
    - **Webcam:** click **Find cameras**, select the camera, and click **Start camera**. Present one QR code at a time, wait for the confirmation, then remove the code.
    - **USB QR scanner:** configure it as a keyboard scanner with an **Enter** suffix. Click the employee-number field, then scan the code. You can also enter the employee number manually and press Enter.
 5. The first valid scan records **time-in**. The next valid scan records **time-out**. A later scan starts another shift.
-
-## Accounts and access
-
-The sign-in page has exactly two accounts:
-
-- **`admin`** opens the complete existing system: Attendance station, attendance history/export, and employee management.
-- **`attendance`** opens only the Attendance station. Employees can scan a QR code using a camera or USB scanner, or type their employee number when no camera is available.
-
-Only the administrator sees **Change passwords**. It can reset the password for either the `admin` or `attendance` account. New passwords must contain 8–200 characters. Passwords are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
-
-On a new database, the initial passwords are `admin` and `attendance`. The optional `RAM_ADMIN_PASSWORD` and `RAM_ATTENDANCE_PASSWORD` environment variables change these first-time values. After the accounts have been created, use the administrator's **Change passwords** button; environment values do not overwrite saved passwords.
-
-PowerShell example for the current terminal session:
-
-```powershell
-$env:RAM_ADMIN_PASSWORD = "use-a-strong-admin-password"
-$env:RAM_ATTENDANCE_PASSWORD = "use-a-different-station-password"
-.\start.cmd
-```
 
 To run an already built application from a terminal:
 
 ```powershell
 java -jar target/attendance-tracker.jar
 ```
+
+The sign-in page has exactly two accounts. `admin` opens Attendance station, Employees, Holidays, and Payroll. `attendance` opens only Attendance station. Only the administrator sees **Change passwords**, which can reset either account. New passwords must contain 8–200 characters and are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
+
+On a new database, the optional `RAM_ADMIN_PASSWORD` and `RAM_ATTENDANCE_PASSWORD` environment variables can replace the initial passwords. After account creation, use **Change passwords**; environment values do not overwrite saved passwords.
 
 On Linux/macOS, run `sh ./start.sh`. Camera support depends on your OS and native camera driver; a USB keyboard scanner uses ordinary text input and does not need webcam drivers.
 
@@ -60,6 +45,20 @@ The app creates **`data/attendance.db`** automatically. The launch scripts alway
 java -jar target/attendance-tracker.jar "--db=C:\Attendance\attendance.db" --zone=Asia/Manila
 ```
 
+## Administrator payroll
+
+Sign in as `admin` to manage employees, holidays, and payroll. Holidays are entered manually; the application does not import or infer them. Each holiday has a unique date, name, paid/unpaid classification, and optional remarks.
+
+Payroll uses a standard 9:00 AM–5:00 PM, Monday–Friday schedule and these rules:
+
+- Hourly rate is pay per day divided by 8.
+- Time-out minutes `00` through `44` round down to the hour; minutes `45` through `59` round up. The rule applies to early departures and overtime in every hour.
+- Overtime starts after 5:00 PM, is credited in whole hours, and is paid at exactly `1.0 ×` the regular hourly rate.
+- Paid non-working holidays receive regular daily pay and create no absence. Unpaid non-working holidays create neither pay nor absence. Working a paid holiday does not add a second daily payment; eligible overtime remains separate.
+- Net pay is gross pay minus absent-hour deductions and administrator-entered manual deductions, plus overtime pay.
+
+Payroll previews are live: attendance, daily-pay, holiday, and manual-deduction changes are reflected when recomputed. Finalizing a period stores an immutable calculation snapshot. Opening the same period later returns that snapshot instead of recalculating it.
+
 The default display timezone is **Asia/Manila**. All timestamps are stored as UTC epoch milliseconds using the computer's clock. `--zone` accepts Java timezone names such as `Asia/Manila`, `UTC`, or `America/New_York` and changes date filtering and display, without changing stored timestamps.
 
 Database check without opening the desktop window:
@@ -76,7 +75,8 @@ Schema:
 employees (
     employee_number TEXT PRIMARY KEY,
     full_name TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1
+    active INTEGER NOT NULL DEFAULT 1,
+    daily_pay_cents INTEGER NOT NULL DEFAULT 0
 )
 attendance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +84,18 @@ attendance (
     time_in INTEGER NOT NULL,
     time_out INTEGER NULL
 )
+
+holidays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    holiday_name TEXT NOT NULL,
+    holiday_date TEXT NOT NULL UNIQUE,
+    holiday_type TEXT NOT NULL, -- PAID or UNPAID
+    remarks TEXT NOT NULL DEFAULT ''
+)
+
+payroll_runs (...)  -- finalized period and timestamp
+payroll_lines (...) -- immutable per-employee calculation snapshot
+
 app_accounts (
     username TEXT PRIMARY KEY,
     password_salt BLOB NOT NULL,
@@ -94,7 +106,7 @@ app_accounts (
 
 The schema also enforces valid active values, time-out at or after time-in, and a unique open shift per employee. Queries use parameter binding. Existing employee data can be loaded into this schema using SQLite tools; this application does not connect to an unspecified external employee database.
 
-Close the app before copying `data/attendance.db` for backup. This is a **local attendance station** with role-based sign-in; it does not include payroll rules or multi-site server synchronization.
+Close the app before copying `data/attendance.db` for backup. This is a **local attendance station** with role-based sign-in; it does not include remote identity management or multi-site server synchronization.
 
 ## Build and test
 
@@ -108,7 +120,9 @@ sh ./mvnw -B -ntp verify
 
 Maven produces **`target/attendance-tracker.jar`**, including runtime dependencies. Rebuild after source changes; `start.cmd`/`start.sh` reuse an existing JAR. You can copy the JAR to another computer with Java 21+ and run it without Maven or internet access.
 
-Automated tests cover QR image decoding through employee lookup, time-in/out alternation, persistence, overnight shifts, cooldown boundaries, simultaneous scans, database constraints, invalid/unknown/inactive employees, exact employee-number matching, date filtering, CSV export, and configuration. Physical webcam and USB scanner checks should also be performed on the intended attendance computer.
+Automated tests cover authentication and role restrictions, password changes and persistence, QR image decoding through employee lookup, time-in/out alternation, persistence, overnight shifts, cooldown boundaries, simultaneous scans, database constraints, invalid/unknown/inactive employees, exact employee-number matching, date filtering, CSV export, and configuration. Physical webcam and USB scanner checks should also be performed on the intended attendance computer.
+
+Payroll tests additionally cover time-out rounding boundaries, early departure rounding, regular-rate overtime, paid and unpaid holidays, prevention of holiday double compensation, manual deductions, and finalized snapshot preservation.
 
 Source layout:
 

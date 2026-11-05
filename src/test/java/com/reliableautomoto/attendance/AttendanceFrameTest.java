@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 class AttendanceFrameTest {
     @TempDir Path directory;
 
-    @Test void attendanceAccountCannotOpenEmployeeManagement() throws Exception {
+    @Test void attendanceAccountCannotOpenAdministratorFeatures() throws Exception {
         assumeFalse(GraphicsEnvironment.isHeadless(), "Desktop UI requires a graphical environment");
         AttendanceDatabase database = new AttendanceDatabase(directory.resolve("roles.db"));
         Authenticator authenticator = new Authenticator(database, "admin", "attendance");
@@ -38,8 +38,10 @@ class AttendanceFrameTest {
             await(() -> hasLabel(adminReference.get(), loaded) && hasLabel(attendanceReference.get(), loaded));
             JTabbedPane adminTabs = onEdt(() -> components(adminReference.get(), JTabbedPane.class).getFirst());
             JTabbedPane attendanceTabs = onEdt(() -> components(attendanceReference.get(), JTabbedPane.class).getFirst());
-            assertEquals(2, adminTabs.getTabCount());
+            assertEquals(4, adminTabs.getTabCount());
             assertEquals("  Employees  ", adminTabs.getTitleAt(1));
+            assertEquals("  Holidays  ", adminTabs.getTitleAt(2));
+            assertEquals("  Payroll  ", adminTabs.getTitleAt(3));
             assertEquals(1, attendanceTabs.getTabCount());
             assertEquals("  Attendance station  ", attendanceTabs.getTitleAt(0));
             assertTrue(components(adminReference.get(), JButton.class).stream()

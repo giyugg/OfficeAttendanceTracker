@@ -15,6 +15,8 @@ import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -32,6 +34,7 @@ public final class AttendanceFrame extends JFrame {
     private static final Color RED = new Color(170, 43, 43);
     private final AttendanceDatabase database;
     private final AttendanceService service;
+    private final PayrollService payrollService;
     private final ZoneId zone;
     private final UserRole role;
     private final Authenticator authenticator;
@@ -59,14 +62,26 @@ public final class AttendanceFrame extends JFrame {
     private final JLabel todayCount = new JLabel("0");
     private final DefaultTableModel attendanceModel = model("Employee #", "Employee name", "Time in", "Time out", "Duration", "Status");
     private final JTable attendanceTable = table(attendanceModel);
-    private final DefaultTableModel employeeModel = model("Employee #", "Employee name", "Status");
+    private final DefaultTableModel employeeModel = model("Employee #", "Employee name", "Daily pay", "Status");
     private final JTable employeeTable = table(employeeModel);
+    private final DefaultTableModel holidayModel = model("Date", "Holiday", "Type", "Remarks");
+    private final JTable holidayTable = table(holidayModel);
+    private final DefaultTableModel payrollModel = new DefaultTableModel(new String[]{"Employee", "Daily pay", "Paid days",
+            "Expected hrs", "Credited hrs", "Absent hrs", "OT hrs", "Gross", "Absent deduction", "OT pay", "Manual deduction", "Net"}, 0) {
+        @Override public boolean isCellEditable(int row, int column) { return column == 10; }
+    };
+    private final JTable payrollTable = table(payrollModel);
+    private final JTextField payrollStart = new JTextField(10);
+    private final JTextField payrollEnd = new JTextField(10);
+    private final JLabel payrollStatus = new JLabel("Choose a payroll period.");
     private final JComboBox<String> scope = new JComboBox<>(new String[]{"Today", "Selected date", "All records", "Currently in"});
     private final JTextField dateInput = new JTextField(10);
     private final JLabel historyCount = new JLabel("No attendance records yet");
     private final JTextField historySearch = new JTextField(16);
     private List<AttendanceRecord> displayedRecords = List.of();
     private List<Employee> displayedEmployees = List.of();
+    private List<Holiday> displayedHolidays = List.of();
+    private PayrollReport displayedPayroll;
     private final Timer clockTimer;
     private final Timer refreshTimer;
     private long refreshVersion;
@@ -90,6 +105,7 @@ public final class AttendanceFrame extends JFrame {
         this.role = java.util.Objects.requireNonNull(role);
         this.authenticator = authenticator;
         this.onLogout = onLogout;
+        this.payrollService = new PayrollService(database, zone, Clock.systemUTC());
         timestampFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy  HH:mm:ss").withZone(zone);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1050, 740));
@@ -103,7 +119,11 @@ public final class AttendanceFrame extends JFrame {
         JTabbedPane tabs = new JTabbedPane();
         tabs.setFont(font(14, Font.BOLD));
         tabs.addTab("  Attendance station  ", attendancePanel());
-        if (role == UserRole.ADMIN) tabs.addTab("  Employees  ", employeesPanel());
+        if (role == UserRole.ADMIN) {
+            tabs.addTab("  Employees  ", employeesPanel());
+            tabs.addTab("  Holidays  ", holidaysPanel());
+            tabs.addTab("  Payroll  ", payrollPanel());
+        }
         root.add(tabs, BorderLayout.CENTER);
         JLabel footer = new JLabel("Database: " + database.path() + "   |   Timezone: " + zone);
         footer.setForeground(MUTED);
@@ -404,23 +424,206 @@ public final class AttendanceFrame extends JFrame {
         return panel;
     }
 
+    private JPanel holidaysPanel() {
+        JPanel panel = card(new BorderLayout(0, 15));
+        JPanel top = transparent(new BorderLayout(15, 0));
+        JPanel intro = transparent(new GridLayout(2, 1, 0, 5));
+        intro.add(label("Holiday settings", 22, Font.BOLD, NAVY));
+        intro.add(label("Administrator-entered holidays are applied to every unfinalized payroll preview.", 13, Font.PLAIN, MUTED));
+        top.add(intro, BorderLayout.CENTER);
+        JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT));
+        JButton add = new JButton("Add holiday");
+        add.addActionListener(event -> editHoliday(null));
+        JButton edit = new JButton("Edit selected");
+        edit.addActionListener(event -> {
+            Holiday holiday = selectedHoliday();
+            if (holiday == null) JOptionPane.showMessageDialog(this, "Select a holiday first.");
+            else editHoliday(holiday);
+        });
+        JButton delete = new JButton("Delete selected");
+        delete.addActionListener(event -> deleteHoliday());
+        controls.add(add);
+        controls.add(edit);
+        controls.add(delete);
+        top.add(controls, BorderLayout.EAST);
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(holidayTable), BorderLayout.CENTER);
+        panel.add(label("Paid and unpaid non-working holidays do not create absence deductions. Dates use YYYY-MM-DD.",
+                12, Font.PLAIN, MUTED), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel payrollPanel() {
+        JPanel panel = card(new BorderLayout(0, 12));
+        JPanel top = transparent(new BorderLayout(12, 0));
+        JPanel title = transparent(new GridLayout(2, 1, 0, 4));
+        title.add(label("Salary computation", 22, Font.BOLD, NAVY));
+        title.add(label("Edit manual deductions in the table, then recompute or finalize.", 13, Font.PLAIN, MUTED));
+        top.add(title, BorderLayout.WEST);
+        JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        LocalDate today = LocalDate.now(zone);
+        payrollStart.setText(today.withDayOfMonth(1).toString());
+        payrollEnd.setText(today.toString());
+        controls.add(new JLabel("From"));
+        controls.add(payrollStart);
+        controls.add(new JLabel("Through"));
+        controls.add(payrollEnd);
+        JButton compute = new JButton("Compute");
+        compute.addActionListener(event -> computePayroll(false));
+        JButton finalize = new JButton("Finalize payroll");
+        finalize.addActionListener(event -> computePayroll(true));
+        controls.add(compute);
+        controls.add(finalize);
+        top.add(controls, BorderLayout.EAST);
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(payrollTable), BorderLayout.CENTER);
+        payrollStatus.setFont(font(12, Font.PLAIN));
+        payrollStatus.setForeground(MUTED);
+        panel.add(payrollStatus, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private Holiday selectedHoliday() {
+        int selected = holidayTable.getSelectedRow();
+        return selected < 0 ? null : displayedHolidays.get(holidayTable.convertRowIndexToModel(selected));
+    }
+
+    private void editHoliday(Holiday holiday) {
+        JTextField name = new JTextField(holiday == null ? "" : holiday.name(), 25);
+        JTextField date = new JTextField(holiday == null ? LocalDate.now(zone).toString() : holiday.date().toString(), 12);
+        JComboBox<HolidayType> type = new JComboBox<>(HolidayType.values());
+        if (holiday != null) type.setSelectedItem(holiday.type());
+        JTextArea remarks = new JTextArea(holiday == null ? "" : holiday.remarks(), 3, 25);
+        remarks.setLineWrap(true);
+        remarks.setWrapStyleWord(true);
+        JPanel form = new JPanel(new GridLayout(0, 1, 0, 6));
+        form.add(new JLabel("Holiday name"));
+        form.add(name);
+        form.add(new JLabel("Holiday date (YYYY-MM-DD)"));
+        form.add(date);
+        form.add(new JLabel("Holiday type"));
+        form.add(type);
+        form.add(new JLabel("Remarks (optional)"));
+        form.add(new JScrollPane(remarks));
+        while (JOptionPane.showConfirmDialog(this, form, holiday == null ? "Add holiday" : "Edit holiday",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
+            LocalDate parsed;
+            try {
+                parsed = LocalDate.parse(date.getText().strip());
+                if (name.getText().isBlank()) throw new IllegalArgumentException("Enter a holiday name.");
+            } catch (DateTimeParseException error) {
+                JOptionPane.showMessageDialog(this, "Enter the holiday date as YYYY-MM-DD.", "Check holiday", JOptionPane.WARNING_MESSAGE);
+                continue;
+            } catch (IllegalArgumentException error) {
+                JOptionPane.showMessageDialog(this, error.getMessage(), "Check holiday", JOptionPane.WARNING_MESSAGE);
+                continue;
+            }
+            LocalDate holidayDate = parsed;
+            HolidayType holidayType = (HolidayType) type.getSelectedItem();
+            runDatabase(() -> {
+                if (holiday == null) database.addHoliday(name.getText(), holidayDate, holidayType, remarks.getText());
+                else database.updateHoliday(holiday.id(), name.getText(), holidayDate, holidayType, remarks.getText());
+                return null;
+            }, ignored -> refreshData());
+            break;
+        }
+    }
+
+    private void deleteHoliday() {
+        Holiday holiday = selectedHoliday();
+        if (holiday == null) {
+            JOptionPane.showMessageDialog(this, "Select a holiday first.");
+            return;
+        }
+        if (JOptionPane.showConfirmDialog(this, "Delete " + holiday.name() + " on " + holiday.date() + "?",
+                "Delete holiday", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+        runDatabase(() -> { database.deleteHoliday(holiday.id()); return null; }, ignored -> refreshData());
+    }
+
+    private void computePayroll(boolean finalize) {
+        LocalDate start;
+        LocalDate end;
+        try {
+            start = LocalDate.parse(payrollStart.getText().strip());
+            end = LocalDate.parse(payrollEnd.getText().strip());
+        } catch (DateTimeParseException error) {
+            JOptionPane.showMessageDialog(this, "Enter payroll dates as YYYY-MM-DD.", "Check payroll period", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        java.util.Map<String, BigDecimal> deductions;
+        try {
+            deductions = displayedPayroll != null && displayedPayroll.periodStart().equals(start)
+                    && displayedPayroll.periodEnd().equals(end) ? payrollDeductions() : java.util.Map.of();
+        } catch (IllegalArgumentException error) {
+            JOptionPane.showMessageDialog(this, error.getMessage(), "Check manual deductions", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (finalize && JOptionPane.showConfirmDialog(this,
+                "Finalized payroll preserves this calculation even if attendance, pay rates, or holidays later change. Continue?",
+                "Finalize payroll", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+        payrollStatus.setText(finalize ? "Finalizing payroll..." : "Computing live payroll preview...");
+        LocalDate periodStart = start;
+        LocalDate periodEnd = end;
+        runDatabase(() -> finalize ? payrollService.finalizePayroll(periodStart, periodEnd, deductions)
+                        : payrollService.preview(periodStart, periodEnd, deductions), this::showPayroll);
+    }
+
+    private java.util.Map<String, BigDecimal> payrollDeductions() {
+        if (displayedPayroll == null || payrollModel.getRowCount() != displayedPayroll.lines().size()) return java.util.Map.of();
+        java.util.Map<String, BigDecimal> values = new java.util.HashMap<>();
+        for (int row = 0; row < payrollModel.getRowCount(); row++) {
+            String raw = String.valueOf(payrollModel.getValueAt(row, 10)).replace(",", "").strip();
+            BigDecimal value;
+            try { value = raw.isEmpty() ? BigDecimal.ZERO : new BigDecimal(raw); }
+            catch (NumberFormatException error) { throw new IllegalArgumentException("Manual deduction on row " + (row + 1) + " is not a valid amount."); }
+            if (value.signum() < 0 || value.scale() > 2) throw new IllegalArgumentException("Manual deductions must be non-negative amounts with at most two decimals.");
+            values.put(displayedPayroll.lines().get(row).employeeNumber(), value);
+        }
+        return values;
+    }
+
+    private void showPayroll(PayrollReport report) {
+        displayedPayroll = report;
+        payrollModel.setRowCount(0);
+        for (PayrollLine line : report.lines()) {
+            payrollModel.addRow(new Object[]{line.employeeName() + " (" + line.employeeNumber() + ")", money(line.dailyPay()),
+                    line.paidScheduledDays(), line.expectedRegularHours(), line.creditedRegularHours(), line.absentHours(),
+                    line.overtimeHours(), money(line.grossPay()), money(line.absentDeduction()), money(line.overtimePay()),
+                    money(line.manualDeductions()), money(line.netPay())});
+        }
+        payrollStatus.setText(report.finalized()
+                ? "FINALIZED - saved snapshot from " + timestampFormat.format(report.computedAt()) + "; later configuration changes do not alter it."
+                : "Live preview - holiday, attendance, pay-rate, and deduction changes are reflected until finalization.");
+        payrollStatus.setForeground(report.finalized() ? GREEN : MUTED);
+        payrollTable.setEnabled(!report.finalized());
+    }
+
+    private static String money(BigDecimal value) { return value.setScale(2, RoundingMode.HALF_UP).toPlainString(); }
+
     private void editEmployee(Employee employee) {
         JTextField number = new JTextField(employee == null ? "" : employee.number(), 24);
         JTextField name = new JTextField(employee == null ? "" : employee.name(), 24);
         JCheckBox active = new JCheckBox("Active employee", employee == null || employee.active());
+        JTextField dailyPay = new JTextField(employee == null ? "0.00" : money(employee.dailyPay()), 12);
         number.setEditable(employee == null);
         JPanel form = new JPanel(new GridLayout(0, 1, 0, 7));
         form.add(new JLabel("Employee number (leading zeros are preserved)"));
         form.add(number);
         form.add(new JLabel("Full name"));
         form.add(name);
+        form.add(new JLabel("Pay per day"));
+        form.add(dailyPay);
         if (employee != null) form.add(active);
         while (JOptionPane.showConfirmDialog(this, form, employee == null ? "Add employee" : "Edit employee",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
             String employeeNumber;
+            long dailyPayCents;
             try {
                 employeeNumber = EmployeeNumbers.normalize(number.getText());
                 if (name.getText().isBlank()) throw new IllegalArgumentException("Enter the employee's name.");
+                BigDecimal amount = new BigDecimal(dailyPay.getText().replace(",", "").strip());
+                if (amount.signum() < 0 || amount.scale() > 2) throw new IllegalArgumentException("Daily pay must be a non-negative amount with at most two decimals.");
+                dailyPayCents = amount.movePointRight(2).longValueExact();
             } catch (IllegalArgumentException error) {
                 JOptionPane.showMessageDialog(this, error.getMessage(), "Check employee details", JOptionPane.WARNING_MESSAGE);
                 continue;
@@ -428,8 +631,10 @@ public final class AttendanceFrame extends JFrame {
             String fullName = name.getText();
             boolean isActive = active.isSelected();
             runDatabase(() -> {
-                if (employee == null) database.addEmployee(employeeNumber, fullName);
-                else database.updateEmployee(employee.number(), fullName, isActive);
+                if (employee == null) {
+                    database.addEmployee(employeeNumber, fullName);
+                    database.setEmployeeDailyPay(employeeNumber, dailyPayCents);
+                } else database.updateEmployee(employee.number(), fullName, isActive, dailyPayCents);
                 return employeeNumber;
             }, ignored -> refreshData());
             break;
@@ -532,13 +737,19 @@ public final class AttendanceFrame extends JFrame {
         long version = ++refreshVersion;
         runDatabase(() -> new Snapshot(database.employees(), database.attendance(from, until, selection == 3),
                 database.attendance(null, null, true).size(), database.attendance(today.atStartOfDay(zone).toInstant(),
-                today.plusDays(1).atStartOfDay(zone).toInstant(), false).size()), snapshot -> {
+                today.plusDays(1).atStartOfDay(zone).toInstant(), false).size(),
+                role == UserRole.ADMIN ? database.holidays(null, null) : List.of()), snapshot -> {
             if (version != refreshVersion) return;
             displayedEmployees = snapshot.employees();
             displayedRecords = snapshot.records();
             employeeModel.setRowCount(0);
             for (Employee employee : displayedEmployees) {
-                employeeModel.addRow(new Object[]{employee.number(), employee.name(), employee.active() ? "Active" : "Inactive"});
+                employeeModel.addRow(new Object[]{employee.number(), employee.name(), money(employee.dailyPay()), employee.active() ? "Active" : "Inactive"});
+            }
+            displayedHolidays = snapshot.holidays();
+            holidayModel.setRowCount(0);
+            for (Holiday holiday : displayedHolidays) {
+                holidayModel.addRow(new Object[]{holiday.date(), holiday.name(), holiday.type(), holiday.remarks()});
             }
             attendanceModel.setRowCount(0);
             for (AttendanceRecord record : displayedRecords) {
@@ -671,7 +882,8 @@ public final class AttendanceFrame extends JFrame {
 
     private static Font font(int size, int style) { return new Font("SansSerif", style, size); }
 
-    private record Snapshot(List<Employee> employees, List<AttendanceRecord> records, int openCount, int todayCount) { }
+    private record Snapshot(List<Employee> employees, List<AttendanceRecord> records, int openCount, int todayCount,
+                            List<Holiday> holidays) { }
 
     private static final class PreviewPanel extends JPanel {
         private BufferedImage frame;
