@@ -19,6 +19,7 @@ class AppConfigTest {
 
     @Test void invalidArgumentsFailClearly() {
         assertThrows(IllegalArgumentException.class, () -> AppConfig.parse(new String[]{"--unknown"}));
+        assertThrows(IllegalArgumentException.class, () -> AppConfig.parse(new String[]{"--admin"}));
         assertThrows(IllegalArgumentException.class, () -> AppConfig.parse(new String[]{"--db="}));
         assertThrows(java.time.DateTimeException.class, () -> AppConfig.parse(new String[]{"--zone=invalid"}));
     }

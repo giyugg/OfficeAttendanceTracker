@@ -21,6 +21,41 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 class AttendanceFrameTest {
     @TempDir Path directory;
 
+    @Test void attendanceAccountCannotOpenAdministratorFeatures() throws Exception {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Desktop UI requires a graphical environment");
+        AttendanceDatabase database = new AttendanceDatabase(directory.resolve("roles.db"));
+        Authenticator authenticator = new Authenticator(database, "admin", "attendance");
+        AtomicReference<AttendanceFrame> adminReference = new AtomicReference<>();
+        AtomicReference<AttendanceFrame> attendanceReference = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            adminReference.set(new AttendanceFrame(database, new AttendanceService(database, Clock.systemUTC()),
+                    ZoneId.of("Asia/Manila"), UserRole.ADMIN, authenticator, () -> { }));
+            attendanceReference.set(new AttendanceFrame(database, new AttendanceService(database, Clock.systemUTC()),
+                    ZoneId.of("Asia/Manila"), UserRole.ATTENDANCE, authenticator, () -> { }));
+        });
+        try {
+            String loaded = "0 record(s) · Selected by time-in date · Asia/Manila";
+            await(() -> hasLabel(adminReference.get(), loaded) && hasLabel(attendanceReference.get(), loaded));
+            JTabbedPane adminTabs = onEdt(() -> components(adminReference.get(), JTabbedPane.class).getFirst());
+            JTabbedPane attendanceTabs = onEdt(() -> components(attendanceReference.get(), JTabbedPane.class).getFirst());
+            assertEquals(4, adminTabs.getTabCount());
+            assertEquals("  Employees  ", adminTabs.getTitleAt(1));
+            assertEquals("  Holidays  ", adminTabs.getTitleAt(2));
+            assertEquals("  Payroll  ", adminTabs.getTitleAt(3));
+            assertEquals(1, attendanceTabs.getTabCount());
+            assertEquals("  Attendance station  ", attendanceTabs.getTitleAt(0));
+            assertTrue(components(adminReference.get(), JButton.class).stream()
+                    .anyMatch(button -> "Change passwords".equals(button.getText())));
+            assertFalse(components(attendanceReference.get(), JButton.class).stream()
+                    .anyMatch(button -> "Change passwords".equals(button.getText())));
+        } finally {
+            SwingUtilities.invokeAndWait(() -> {
+                adminReference.get().dispose();
+                attendanceReference.get().dispose();
+            });
+        }
+    }
+
     @Test void keyboardScannerShowsTimeInTimeOutAndUnknownEmployee() throws Exception {
         assumeFalse(GraphicsEnvironment.isHeadless(), "Desktop UI requires a graphical environment");
         ZoneId zone = ZoneId.of("Asia/Manila");
