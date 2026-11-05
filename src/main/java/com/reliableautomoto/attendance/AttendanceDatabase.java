@@ -60,6 +60,51 @@ public final class AttendanceDatabase {
                 ON attendance(employee_number) WHERE time_out IS NULL
                 """);
             statement.execute("CREATE INDEX IF NOT EXISTS attendance_employee_history ON attendance(employee_number, id DESC)");
+            statement.execute("""
+                CREATE TABLE IF NOT EXISTS app_accounts (
+                    username TEXT PRIMARY KEY NOT NULL CHECK(username IN ('admin', 'attendance')),
+                    password_salt BLOB NOT NULL CHECK(length(password_salt) >= 16),
+                    password_hash BLOB NOT NULL CHECK(length(password_hash) >= 32),
+                    iterations INTEGER NOT NULL CHECK(iterations >= 100000)
+                )
+                """);
+        }
+    }
+
+    void addAccountIfMissing(UserRole role, Authenticator.StoredCredential credential) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO app_accounts(username, password_salt, password_hash, iterations)
+                VALUES (?, ?, ?, ?) ON CONFLICT(username) DO NOTHING
+                """)) {
+            statement.setString(1, role.username());
+            statement.setBytes(2, credential.salt());
+            statement.setBytes(3, credential.hash());
+            statement.setInt(4, credential.iterations());
+            statement.executeUpdate();
+        }
+    }
+
+    java.util.Optional<Authenticator.StoredCredential> accountCredential(UserRole role) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT password_salt, password_hash, iterations FROM app_accounts WHERE username = ?")) {
+            statement.setString(1, role.username());
+            try (ResultSet row = statement.executeQuery()) {
+                if (!row.next()) return java.util.Optional.empty();
+                return java.util.Optional.of(new Authenticator.StoredCredential(
+                        row.getBytes(1), row.getBytes(2), row.getInt(3)));
+            }
+        }
+    }
+
+    void updateAccountCredential(UserRole role, Authenticator.StoredCredential credential) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                UPDATE app_accounts SET password_salt = ?, password_hash = ?, iterations = ? WHERE username = ?
+                """)) {
+            statement.setBytes(1, credential.salt());
+            statement.setBytes(2, credential.hash());
+            statement.setInt(3, credential.iterations());
+            statement.setString(4, role.username());
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("Account no longer exists: " + role.username());
         }
     }
 

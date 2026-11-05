@@ -33,6 +33,9 @@ public final class AttendanceFrame extends JFrame {
     private final AttendanceDatabase database;
     private final AttendanceService service;
     private final ZoneId zone;
+    private final UserRole role;
+    private final Authenticator authenticator;
+    private final Runnable onLogout;
     private final DateTimeFormatter timestampFormat;
     private final ExecutorService databaseWorker = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "attendance-database");
@@ -70,10 +73,23 @@ public final class AttendanceFrame extends JFrame {
     private boolean closing;
 
     public AttendanceFrame(AttendanceDatabase database, AttendanceService service, ZoneId zone) {
+        this(database, service, zone, UserRole.ADMIN, null, null);
+    }
+
+    public AttendanceFrame(AttendanceDatabase database, AttendanceService service, ZoneId zone,
+                           UserRole role, Runnable onLogout) {
+        this(database, service, zone, role, null, onLogout);
+    }
+
+    public AttendanceFrame(AttendanceDatabase database, AttendanceService service, ZoneId zone,
+                           UserRole role, Authenticator authenticator, Runnable onLogout) {
         super("Reliable AutoMoto | QR Attendance");
         this.database = database;
         this.service = service;
         this.zone = zone;
+        this.role = java.util.Objects.requireNonNull(role);
+        this.authenticator = authenticator;
+        this.onLogout = onLogout;
         timestampFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy  HH:mm:ss").withZone(zone);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1050, 740));
@@ -87,7 +103,7 @@ public final class AttendanceFrame extends JFrame {
         JTabbedPane tabs = new JTabbedPane();
         tabs.setFont(font(14, Font.BOLD));
         tabs.addTab("  Attendance station  ", attendancePanel());
-        tabs.addTab("  Employees  ", employeesPanel());
+        if (role == UserRole.ADMIN) tabs.addTab("  Employees  ", employeesPanel());
         root.add(tabs, BorderLayout.CENTER);
         JLabel footer = new JLabel("Database: " + database.path() + "   |   Timezone: " + zone);
         footer.setForeground(MUTED);
@@ -133,8 +149,78 @@ public final class AttendanceFrame extends JFrame {
         clockLabel.setFont(font(14, Font.PLAIN));
         clockLabel.setForeground(NAVY);
         clockLabel.setHorizontalAlignment(SwingConstants.RIGHT);
-        panel.add(clockLabel, BorderLayout.EAST);
+        JPanel session = transparent(new BorderLayout(0, 5));
+        session.add(clockLabel, BorderLayout.NORTH);
+        JPanel account = transparent(new FlowLayout(FlowLayout.RIGHT, 7, 0));
+        account.add(label("Signed in: " + role.username(), 11, Font.PLAIN, MUTED));
+        if (role == UserRole.ADMIN && authenticator != null) {
+            JButton passwords = new JButton("Change passwords");
+            passwords.addActionListener(event -> changePassword());
+            account.add(passwords);
+        }
+        if (onLogout != null) {
+            JButton logout = new JButton("Log out");
+            logout.addActionListener(event -> logout());
+            account.add(logout);
+        }
+        session.add(account, BorderLayout.SOUTH);
+        panel.add(session, BorderLayout.EAST);
         return panel;
+    }
+
+    private void logout() {
+        if (JOptionPane.showConfirmDialog(this, "Log out of the " + role.displayName() + " account?",
+                "Log out", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+        dispose();
+        if (onLogout != null) onLogout.run();
+    }
+
+    private void changePassword() {
+        JComboBox<String> account = new JComboBox<>(new String[]{
+                UserRole.ADMIN.username(), UserRole.ATTENDANCE.username()
+        });
+        JPasswordField newPassword = new JPasswordField(24);
+        JPasswordField confirmation = new JPasswordField(24);
+        JPanel form = new JPanel(new GridLayout(0, 1, 0, 7));
+        form.add(new JLabel("Account"));
+        form.add(account);
+        form.add(new JLabel("New password (at least 8 characters)"));
+        form.add(newPassword);
+        form.add(new JLabel("Confirm new password"));
+        form.add(confirmation);
+
+        while (JOptionPane.showConfirmDialog(this, form, "Change account password",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
+            char[] entered = newPassword.getPassword();
+            char[] repeated = confirmation.getPassword();
+            try {
+                Authenticator.validateNewPassword(entered);
+                if (!java.util.Arrays.equals(entered, repeated)) {
+                    throw new IllegalArgumentException("The passwords do not match.");
+                }
+            } catch (IllegalArgumentException error) {
+                java.util.Arrays.fill(entered, '\0');
+                java.util.Arrays.fill(repeated, '\0');
+                newPassword.setText("");
+                confirmation.setText("");
+                JOptionPane.showMessageDialog(this, error.getMessage(), "Check password", JOptionPane.WARNING_MESSAGE);
+                continue;
+            }
+            java.util.Arrays.fill(repeated, '\0');
+            UserRole selected = account.getSelectedIndex() == 0 ? UserRole.ADMIN : UserRole.ATTENDANCE;
+            char[] passwordForUpdate = entered.clone();
+            java.util.Arrays.fill(entered, '\0');
+            runDatabase(() -> {
+                try {
+                    authenticator.changePassword(role, selected, passwordForUpdate);
+                    return selected;
+                } finally {
+                    java.util.Arrays.fill(passwordForUpdate, '\0');
+                }
+            }, changed -> JOptionPane.showMessageDialog(this,
+                    "Password changed for the " + changed.username() + " account."));
+            break;
+        }
     }
 
     private JPanel attendancePanel() {

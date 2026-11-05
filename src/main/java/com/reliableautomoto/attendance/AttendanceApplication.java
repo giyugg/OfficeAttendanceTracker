@@ -20,10 +20,10 @@ public final class AttendanceApplication {
             }
             if (GraphicsEnvironment.isHeadless()) throw new IllegalStateException("A desktop display is required. Use --check to verify the database without opening a window.");
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            Authenticator authenticator = Authenticator.fromEnvironment(database);
             SwingUtilities.invokeLater(() -> {
-                AttendanceFrame frame = new AttendanceFrame(database,
-                        new AttendanceService(database, Clock.systemUTC()), config.zone());
-                frame.setVisible(true);
+                AttendanceService service = new AttendanceService(database, Clock.systemUTC());
+                showLogin(database, service, config, authenticator);
             });
         } catch (Exception error) {
             System.err.println("Unable to start attendance tracker: " + error.getMessage());
@@ -32,5 +32,15 @@ public final class AttendanceApplication {
             }
             System.exit(1);
         }
+    }
+
+    private static void showLogin(AttendanceDatabase database, AttendanceService service, AppConfig config,
+                                  Authenticator authenticator) {
+        LoginFrame login = new LoginFrame(authenticator, role -> {
+            AttendanceFrame frame = new AttendanceFrame(database, service, config.zone(), role, authenticator,
+                    () -> showLogin(database, service, config, authenticator));
+            frame.setVisible(true);
+        });
+        login.setVisible(true);
     }
 }

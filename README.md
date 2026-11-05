@@ -6,11 +6,30 @@ A Java desktop application that reads an **existing QR code containing only an e
 
 1. Install **Java 21 or newer**. A JDK is required to build from source; a Java runtime is enough for the packaged JAR.
 2. Double-click **`start.cmd`** in this folder. It builds the application if the JAR is missing. The first build needs internet access; Maven is downloaded automatically.
-3. Open **Employees → Add employee**. Enter the employee number exactly as encoded in the existing QR code and enter their name. The database starts empty.
-4. Return to **Attendance station** and choose an input method:
+3. Sign in as **`admin`** (the initial password is `admin`), then open **Employees → Add employee**. Enter the employee number exactly as encoded in the existing QR code and enter their name. The database starts empty.
+4. Return to **Attendance station** and choose an input method, or log in as **`attendance`** (the initial password is `attendance`) to open only this station:
    - **Webcam:** click **Find cameras**, select the camera, and click **Start camera**. Present one QR code at a time, wait for the confirmation, then remove the code.
    - **USB QR scanner:** configure it as a keyboard scanner with an **Enter** suffix. Click the employee-number field, then scan the code. You can also enter the employee number manually and press Enter.
 5. The first valid scan records **time-in**. The next valid scan records **time-out**. A later scan starts another shift.
+
+## Accounts and access
+
+The sign-in page has exactly two accounts:
+
+- **`admin`** opens the complete existing system: Attendance station, attendance history/export, and employee management.
+- **`attendance`** opens only the Attendance station. Employees can scan a QR code using a camera or USB scanner, or type their employee number when no camera is available.
+
+Only the administrator sees **Change passwords**. It can reset the password for either the `admin` or `attendance` account. New passwords must contain 8–200 characters. Passwords are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
+
+On a new database, the initial passwords are `admin` and `attendance`. The optional `RAM_ADMIN_PASSWORD` and `RAM_ATTENDANCE_PASSWORD` environment variables change these first-time values. After the accounts have been created, use the administrator's **Change passwords** button; environment values do not overwrite saved passwords.
+
+PowerShell example for the current terminal session:
+
+```powershell
+$env:RAM_ADMIN_PASSWORD = "use-a-strong-admin-password"
+$env:RAM_ATTENDANCE_PASSWORD = "use-a-different-station-password"
+.\start.cmd
+```
 
 To run an already built application from a terminal:
 
@@ -65,11 +84,17 @@ attendance (
     time_in INTEGER NOT NULL,
     time_out INTEGER NULL
 )
+app_accounts (
+    username TEXT PRIMARY KEY,
+    password_salt BLOB NOT NULL,
+    password_hash BLOB NOT NULL,
+    iterations INTEGER NOT NULL
+)
 ```
 
 The schema also enforces valid active values, time-out at or after time-in, and a unique open shift per employee. Queries use parameter binding. Existing employee data can be loaded into this schema using SQLite tools; this application does not connect to an unspecified external employee database.
 
-Close the app before copying `data/attendance.db` for backup. This is a **local attendance station**: the employee directory and manual input are available to whoever can access the desktop. It does not include administrator sign-in, payroll rules, or multi-site server synchronization.
+Close the app before copying `data/attendance.db` for backup. This is a **local attendance station** with role-based sign-in; it does not include payroll rules or multi-site server synchronization.
 
 ## Build and test
 
