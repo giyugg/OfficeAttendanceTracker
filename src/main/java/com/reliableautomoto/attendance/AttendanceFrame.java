@@ -40,6 +40,7 @@ public final class AttendanceFrame extends JFrame {
     private final Authenticator authenticator;
     private final Runnable onLogout;
     private final DateTimeFormatter timestampFormat;
+    private final DateTimeFormatter summaryTimeFormat;
     private final ExecutorService databaseWorker = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "attendance-database");
         thread.setDaemon(true);
@@ -64,6 +65,12 @@ public final class AttendanceFrame extends JFrame {
     private final JTable attendanceTable = table(attendanceModel);
     private final DefaultTableModel employeeModel = model("Employee #", "Employee name", "Daily pay", "Status");
     private final JTable employeeTable = table(employeeModel);
+    private final DefaultTableModel summaryModel = model("Date", "Time ins", "Time outs", "Hours present", "Status");
+    private final JTable summaryTable = table(summaryModel);
+    private final JComboBox<SummaryEmployeeChoice> summaryEmployee = new JComboBox<>();
+    private final JTextField summaryStart = new JTextField(10);
+    private final JTextField summaryEnd = new JTextField(10);
+    private final JLabel summaryStatus = new JLabel("Select an employee to view attendance.");
     private final DefaultTableModel holidayModel = model("Date", "Holiday", "Type", "Remarks");
     private final JTable holidayTable = table(holidayModel);
     private final DefaultTableModel payrollModel = new DefaultTableModel(new String[]{"Employee", "Daily pay", "Paid days",
@@ -85,6 +92,8 @@ public final class AttendanceFrame extends JFrame {
     private final Timer clockTimer;
     private final Timer refreshTimer;
     private long refreshVersion;
+    private long summaryRefreshVersion;
+    private boolean updatingSummaryEmployees;
     private boolean closing;
 
     public AttendanceFrame(AttendanceDatabase database, AttendanceService service, ZoneId zone) {
@@ -107,6 +116,7 @@ public final class AttendanceFrame extends JFrame {
         this.onLogout = onLogout;
         this.payrollService = new PayrollService(database, zone, Clock.systemUTC());
         timestampFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy  HH:mm:ss").withZone(zone);
+        summaryTimeFormat = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(zone);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1050, 740));
         setSize(1260, 870);
@@ -121,6 +131,7 @@ public final class AttendanceFrame extends JFrame {
         tabs.addTab("  Attendance station  ", attendancePanel());
         if (role == UserRole.ADMIN) {
             tabs.addTab("  Employees  ", employeesPanel());
+            tabs.addTab("  Employee summary  ", employeeSummaryPanel());
             tabs.addTab("  Holidays  ", holidaysPanel());
             tabs.addTab("  Payroll  ", payrollPanel());
         }
@@ -421,6 +432,47 @@ public final class AttendanceFrame extends JFrame {
         installSearch(employeeTable, search);
         bottom.add(search, BorderLayout.EAST);
         panel.add(bottom, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel employeeSummaryPanel() {
+        JPanel panel = card(new BorderLayout(0, 15));
+        JPanel top = transparent(new BorderLayout(15, 0));
+        JPanel intro = transparent(new GridLayout(2, 1, 0, 5));
+        intro.add(label("Employee attendance summary", 22, Font.BOLD, NAVY));
+        intro.add(label("Review the selected employee's time-ins, time-outs, and total hours by time-in date.", 13, Font.PLAIN, MUTED));
+        top.add(intro, BorderLayout.CENTER);
+
+        LocalDate today = LocalDate.now(zone);
+        summaryStart.setText(today.withDayOfMonth(1).toString());
+        summaryEnd.setText(today.toString());
+        summaryStart.setToolTipText("Start date (YYYY-MM-DD), inclusive");
+        summaryEnd.setToolTipText("End date (YYYY-MM-DD), inclusive");
+        summaryEmployee.setPrototypeDisplayValue(new SummaryEmployeeChoice("0000000000", "A reasonably long employee name"));
+        summaryEmployee.addItem(new SummaryEmployeeChoice(null, "-- SELECT AN EMPLOYEE --"));
+
+        JPanel filters = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        filters.add(label("Employee", 11, Font.PLAIN, MUTED));
+        filters.add(summaryEmployee);
+        filters.add(label("From", 11, Font.PLAIN, MUTED));
+        filters.add(summaryStart);
+        filters.add(label("To", 11, Font.PLAIN, MUTED));
+        filters.add(summaryEnd);
+        JButton refresh = new JButton("Refresh");
+        refresh.addActionListener(event -> refreshSummary());
+        filters.add(refresh);
+        top.add(filters, BorderLayout.EAST);
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(summaryTable), BorderLayout.CENTER);
+
+        summaryStatus.setFont(font(12, Font.PLAIN));
+        summaryStatus.setForeground(MUTED);
+        panel.add(summaryStatus, BorderLayout.SOUTH);
+        summaryStart.addActionListener(event -> refreshSummary());
+        summaryEnd.addActionListener(event -> refreshSummary());
+        summaryEmployee.addActionListener(event -> {
+            if (!updatingSummaryEmployees) refreshSummary();
+        });
         return panel;
     }
 
@@ -746,6 +798,7 @@ public final class AttendanceFrame extends JFrame {
             for (Employee employee : displayedEmployees) {
                 employeeModel.addRow(new Object[]{employee.number(), employee.name(), money(employee.dailyPay()), employee.active() ? "Active" : "Inactive"});
             }
+            refreshSummaryEmployeeChoices();
             displayedHolidays = snapshot.holidays();
             holidayModel.setRowCount(0);
             for (Holiday holiday : displayedHolidays) {
@@ -761,6 +814,82 @@ public final class AttendanceFrame extends JFrame {
             openCount.setText(Integer.toString(snapshot.openCount()));
             todayCount.setText(Integer.toString(snapshot.todayCount()));
             historyCount.setText(displayedRecords.size() + " record(s) · Selected by time-in date · " + zone);
+            refreshSummary();
+        });
+    }
+
+    private void refreshSummaryEmployeeChoices() {
+        if (role != UserRole.ADMIN) return;
+        SummaryEmployeeChoice selected = (SummaryEmployeeChoice) summaryEmployee.getSelectedItem();
+        String selectedNumber = selected == null ? null : selected.number();
+        updatingSummaryEmployees = true;
+        try {
+            summaryEmployee.removeAllItems();
+            summaryEmployee.addItem(new SummaryEmployeeChoice(null, "-- SELECT AN EMPLOYEE --"));
+            int selectedIndex = 0;
+            for (Employee employee : displayedEmployees) {
+                summaryEmployee.addItem(new SummaryEmployeeChoice(employee.number(), employee.name()));
+                if (employee.number().equals(selectedNumber)) selectedIndex = summaryEmployee.getItemCount() - 1;
+            }
+            summaryEmployee.setSelectedIndex(selectedIndex);
+        } finally {
+            updatingSummaryEmployees = false;
+        }
+    }
+
+    private void refreshSummary() {
+        if (role != UserRole.ADMIN || closing) return;
+        SummaryEmployeeChoice choice = (SummaryEmployeeChoice) summaryEmployee.getSelectedItem();
+        String employeeNumber = choice == null ? null : choice.number();
+        if (employeeNumber == null) {
+            summaryRefreshVersion++;
+            summaryModel.setRowCount(0);
+            summaryStatus.setText("Select an employee to view attendance.");
+            return;
+        }
+        LocalDate start;
+        LocalDate end;
+        try {
+            start = LocalDate.parse(summaryStart.getText().strip());
+            end = LocalDate.parse(summaryEnd.getText().strip());
+        } catch (DateTimeParseException error) {
+            summaryStatus.setText("Enter valid From and To dates in YYYY-MM-DD format.");
+            return;
+        }
+        if (end.isBefore(start)) {
+            summaryStatus.setText("The To date must be the same as or later than the From date.");
+            return;
+        }
+        Instant from = start.atStartOfDay(zone).toInstant();
+        Instant until = end.plusDays(1).atStartOfDay(zone).toInstant();
+        Instant asOf = Instant.now();
+        long version = ++summaryRefreshVersion;
+        summaryStatus.setText("Loading attendance summary…");
+        runDatabase(() -> {
+            List<AttendanceRecord> records = database.attendance(from, until, false);
+            records = records.stream().filter(record -> employeeNumber.equals(record.employeeNumber())).toList();
+            return EmployeeSummaryService.summarize(records, zone, asOf);
+        }, summaries -> {
+            if (version != summaryRefreshVersion) return;
+            summaryModel.setRowCount(0);
+            Duration total = Duration.ZERO;
+            int shifts = 0;
+            int openShifts = 0;
+            for (EmployeeDailySummary summary : summaries) {
+                String timeIns = summary.shifts().stream()
+                        .map(record -> summaryTimeFormat.format(record.timeIn())).collect(java.util.stream.Collectors.joining(", "));
+                String timeOuts = summary.shifts().stream()
+                        .map(record -> record.timeOut() == null ? "—" : summaryTimeFormat.format(record.timeOut()))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                summaryModel.addRow(new Object[]{summary.date(), timeIns, timeOuts, formatDuration(summary.presentDuration()),
+                        summary.inProgress() ? "In progress" : "Complete"});
+                total = total.plus(summary.presentDuration());
+                shifts += summary.shifts().size();
+                if (summary.inProgress()) openShifts++;
+            }
+            summaryStatus.setText(summaries.size() + " employee-day(s) · " + shifts + " shift(s) · Total present: "
+                    + formatDuration(total) + (openShifts == 0 ? "" : " · " + openShifts + " open shift(s)")
+                    + " · Dates use time-in in " + zone);
         });
     }
 
@@ -882,8 +1011,16 @@ public final class AttendanceFrame extends JFrame {
 
     private static Font font(int size, int style) { return new Font("SansSerif", style, size); }
 
+    private static String formatDuration(Duration duration) {
+        return "%dh %02dm %02ds".formatted(duration.toHours(), duration.toMinutesPart(), duration.toSecondsPart());
+    }
+
     private record Snapshot(List<Employee> employees, List<AttendanceRecord> records, int openCount, int todayCount,
                             List<Holiday> holidays) { }
+
+    private record SummaryEmployeeChoice(String number, String name) {
+        @Override public String toString() { return number == null ? name : number + " — " + name; }
+    }
 
     private static final class PreviewPanel extends JPanel {
         private BufferedImage frame;

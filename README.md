@@ -18,7 +18,7 @@ To run an already built application from a terminal:
 java -jar target/attendance-tracker.jar
 ```
 
-The sign-in page has exactly two accounts. `admin` opens Attendance station, Employees, Holidays, and Payroll. `attendance` opens only Attendance station. Only the administrator sees **Change passwords**, which can reset either account. New passwords must contain 8–200 characters and are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
+The sign-in page has exactly two accounts. `admin` opens Attendance station, Employees, Employee summary, Holidays, and Payroll. `attendance` opens only Attendance station. Only the administrator sees **Change passwords**, which can reset either account. New passwords must contain 8–200 characters and are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
 
 On a new database, the optional `RAM_ADMIN_PASSWORD` and `RAM_ATTENDANCE_PASSWORD` environment variables can replace the initial passwords. After account creation, use **Change passwords**; environment values do not overwrite saved passwords.
 
@@ -36,6 +36,10 @@ On Linux/macOS, run `sh ./start.sh`. Camera support depends on your OS and nativ
 - Inactive employees cannot scan. Reactivate an employee to close an outstanding shift. Editing a name also changes the name shown on historical records, which link to the employee directory.
 - **Today** and **Selected date** filter by the shift's **time-in date**. **Currently in** includes all open shifts, including overnight shifts. The date field uses `YYYY-MM-DD`.
 - **Export CSV** exports the rows currently visible in attendance history, including the employee search filter and table sort order. Times include a UTC offset. When opening a CSV in Excel, import the employee-number column as **Text** to keep leading zeros.
+
+## Administrator employee summary
+
+The **Employee summary** tab is available only to the `admin` account. Select an employee and an inclusive From/To date range; no attendance is shown until an employee is selected. The table groups the selected employee's shifts by time-in date and shows every time-in and matching time-out, the total hours present for the day, and whether a shift remains open. Multiple shifts on the same date are combined into one daily row. Open shifts include elapsed time through the latest refresh, and overnight shifts remain assigned to the date on which the employee timed in.
 
 ## Database and time settings
 
