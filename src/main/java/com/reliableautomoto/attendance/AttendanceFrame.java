@@ -35,6 +35,7 @@ public final class AttendanceFrame extends JFrame {
     private final AttendanceDatabase database;
     private final AttendanceService service;
     private final PayrollService payrollService;
+    private final ManualAttendanceService manualAttendanceService;
     private final ZoneId zone;
     private final UserRole role;
     private final Authenticator authenticator;
@@ -71,6 +72,10 @@ public final class AttendanceFrame extends JFrame {
     private final JTextField summaryStart = new JTextField(10);
     private final JTextField summaryEnd = new JTextField(10);
     private final JLabel summaryStatus = new JLabel("Select an employee to view attendance.");
+    private final DefaultTableModel dateSummaryModel = model("Employee #", "Employee name", "Time ins", "Time outs", "Hours present", "Status");
+    private final JTable dateSummaryTable = table(dateSummaryModel);
+    private final JTextField dateSummaryDate = new JTextField(10);
+    private final JLabel dateSummaryStatus = new JLabel("Choose a date to view attendance.");
     private final DefaultTableModel holidayModel = model("Date", "Holiday", "Type", "Remarks");
     private final JTable holidayTable = table(holidayModel);
     private final DefaultTableModel payrollModel = new DefaultTableModel(new String[]{"Employee", "Daily pay", "Paid days",
@@ -93,6 +98,7 @@ public final class AttendanceFrame extends JFrame {
     private final Timer refreshTimer;
     private long refreshVersion;
     private long summaryRefreshVersion;
+    private long dateSummaryRefreshVersion;
     private boolean updatingSummaryEmployees;
     private boolean closing;
 
@@ -115,6 +121,7 @@ public final class AttendanceFrame extends JFrame {
         this.authenticator = authenticator;
         this.onLogout = onLogout;
         this.payrollService = new PayrollService(database, zone, Clock.systemUTC());
+        this.manualAttendanceService = new ManualAttendanceService(database, zone, Clock.systemUTC());
         timestampFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy  HH:mm:ss").withZone(zone);
         summaryTimeFormat = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(zone);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
@@ -132,6 +139,7 @@ public final class AttendanceFrame extends JFrame {
         if (role == UserRole.ADMIN) {
             tabs.addTab("  Employees  ", employeesPanel());
             tabs.addTab("  Employee summary  ", employeeSummaryPanel());
+            tabs.addTab("  Date summary  ", dateSummaryPanel());
             tabs.addTab("  Holidays  ", holidaysPanel());
             tabs.addTab("  Payroll  ", payrollPanel());
         }
@@ -467,13 +475,142 @@ public final class AttendanceFrame extends JFrame {
 
         summaryStatus.setFont(font(12, Font.PLAIN));
         summaryStatus.setForeground(MUTED);
-        panel.add(summaryStatus, BorderLayout.SOUTH);
+        JPanel bottom = transparent(new BorderLayout(10, 0));
+        bottom.add(summaryStatus, BorderLayout.CENTER);
+        JButton addPastAttendance = new JButton("Add past attendance");
+        addPastAttendance.addActionListener(event -> addPastAttendance(LocalDate.now(zone).minusDays(1)));
+        bottom.add(addPastAttendance, BorderLayout.EAST);
+        panel.add(bottom, BorderLayout.SOUTH);
         summaryStart.addActionListener(event -> refreshSummary());
         summaryEnd.addActionListener(event -> refreshSummary());
         summaryEmployee.addActionListener(event -> {
             if (!updatingSummaryEmployees) refreshSummary();
         });
         return panel;
+    }
+
+    private void addPastAttendance(LocalDate suggestedDate) {
+        if (displayedEmployees.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Register an employee before adding attendance.");
+            return;
+        }
+        JComboBox<SummaryEmployeeChoice> employee = new JComboBox<>();
+        employee.setPrototypeDisplayValue(new SummaryEmployeeChoice("0000000000", "A reasonably long employee name"));
+        SummaryEmployeeChoice selected = (SummaryEmployeeChoice) summaryEmployee.getSelectedItem();
+        int selectedIndex = 0;
+        for (Employee item : displayedEmployees) {
+            employee.addItem(new SummaryEmployeeChoice(item.number(), item.name()));
+            if (selected != null && item.number().equals(selected.number())) selectedIndex = employee.getItemCount() - 1;
+        }
+        employee.setSelectedIndex(selectedIndex);
+        LocalDate initialDate = suggestedDate != null && suggestedDate.isBefore(LocalDate.now(zone))
+                ? suggestedDate : LocalDate.now(zone).minusDays(1);
+        JTextField date = new JTextField(initialDate.toString(), 12);
+        JTextField timeIn = new JTextField("09:00", 8);
+        JTextField timeOut = new JTextField("17:00", 8);
+        JPanel form = new JPanel(new GridLayout(0, 1, 0, 7));
+        form.add(new JLabel("Employee"));
+        form.add(employee);
+        form.add(new JLabel("Past attendance date (YYYY-MM-DD)"));
+        form.add(date);
+        form.add(new JLabel("Time in (HH:mm)"));
+        form.add(timeIn);
+        form.add(new JLabel("Time out (HH:mm, same date)"));
+        form.add(timeOut);
+
+        while (JOptionPane.showConfirmDialog(this, form, "Add past attendance",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
+            SummaryEmployeeChoice choice = (SummaryEmployeeChoice) employee.getSelectedItem();
+            LocalDate attendanceDate;
+            LocalTime attendanceTimeIn;
+            LocalTime attendanceTimeOut;
+            try {
+                attendanceDate = LocalDate.parse(date.getText().strip());
+                attendanceTimeIn = LocalTime.parse(timeIn.getText().strip());
+                attendanceTimeOut = LocalTime.parse(timeOut.getText().strip());
+                if (!attendanceDate.isBefore(LocalDate.now(zone))) {
+                    throw new IllegalArgumentException("Manual attendance can only be added for a past date.");
+                }
+                if (!attendanceTimeOut.isAfter(attendanceTimeIn)) {
+                    throw new IllegalArgumentException("Time-out must be later than time-in on the same date.");
+                }
+            } catch (DateTimeParseException error) {
+                JOptionPane.showMessageDialog(this, "Enter the date as YYYY-MM-DD and times as HH:mm.",
+                        "Check attendance", JOptionPane.WARNING_MESSAGE);
+                continue;
+            } catch (IllegalArgumentException error) {
+                JOptionPane.showMessageDialog(this, error.getMessage(), "Check attendance", JOptionPane.WARNING_MESSAGE);
+                continue;
+            }
+            String employeeNumber = choice.number();
+            String employeeName = choice.name();
+            runDatabase(() -> manualAttendanceService.add(employeeNumber, attendanceDate,
+                    attendanceTimeIn, attendanceTimeOut), added -> {
+                selectSummaryEmployee(employeeNumber);
+                dateSummaryDate.setText(attendanceDate.toString());
+                refreshData();
+                JOptionPane.showMessageDialog(this, "Past attendance added for " + employeeName + " on "
+                        + attendanceDate + ".");
+            });
+            break;
+        }
+    }
+
+    private void selectSummaryEmployee(String employeeNumber) {
+        updatingSummaryEmployees = true;
+        try {
+            for (int index = 1; index < summaryEmployee.getItemCount(); index++) {
+                SummaryEmployeeChoice choice = summaryEmployee.getItemAt(index);
+                if (employeeNumber.equals(choice.number())) {
+                    summaryEmployee.setSelectedIndex(index);
+                    return;
+                }
+            }
+        } finally {
+            updatingSummaryEmployees = false;
+        }
+    }
+
+    private JPanel dateSummaryPanel() {
+        JPanel panel = card(new BorderLayout(0, 15));
+        JPanel top = transparent(new BorderLayout(15, 0));
+        JPanel intro = transparent(new GridLayout(2, 1, 0, 5));
+        intro.add(label("Daily attendance summary", 22, Font.BOLD, NAVY));
+        intro.add(label("Review every employee's time-ins, time-outs, and total hours for one time-in date.",
+                13, Font.PLAIN, MUTED));
+        top.add(intro, BorderLayout.CENTER);
+
+        dateSummaryDate.setText(LocalDate.now(zone).toString());
+        dateSummaryDate.setToolTipText("Attendance date (YYYY-MM-DD)");
+        JPanel filters = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        filters.add(label("Date", 11, Font.PLAIN, MUTED));
+        filters.add(dateSummaryDate);
+        JButton refresh = new JButton("Refresh");
+        refresh.addActionListener(event -> refreshDateSummary());
+        filters.add(refresh);
+        top.add(filters, BorderLayout.EAST);
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(dateSummaryTable), BorderLayout.CENTER);
+
+        dateSummaryStatus.setFont(font(12, Font.PLAIN));
+        dateSummaryStatus.setForeground(MUTED);
+        JPanel bottom = transparent(new BorderLayout(10, 0));
+        bottom.add(dateSummaryStatus, BorderLayout.CENTER);
+        JButton addPastAttendance = new JButton("Add past attendance");
+        addPastAttendance.addActionListener(event -> addPastAttendance(selectedPastDate()));
+        bottom.add(addPastAttendance, BorderLayout.EAST);
+        panel.add(bottom, BorderLayout.SOUTH);
+        dateSummaryDate.addActionListener(event -> refreshDateSummary());
+        return panel;
+    }
+
+    private LocalDate selectedPastDate() {
+        try {
+            LocalDate selected = LocalDate.parse(dateSummaryDate.getText().strip());
+            return selected.isBefore(LocalDate.now(zone)) ? selected : LocalDate.now(zone).minusDays(1);
+        } catch (DateTimeParseException error) {
+            return LocalDate.now(zone).minusDays(1);
+        }
     }
 
     private JPanel holidaysPanel() {
@@ -815,6 +952,7 @@ public final class AttendanceFrame extends JFrame {
             todayCount.setText(Integer.toString(snapshot.todayCount()));
             historyCount.setText(displayedRecords.size() + " record(s) · Selected by time-in date · " + zone);
             refreshSummary();
+            refreshDateSummary();
         });
     }
 
@@ -890,6 +1028,49 @@ public final class AttendanceFrame extends JFrame {
             summaryStatus.setText(summaries.size() + " employee-day(s) · " + shifts + " shift(s) · Total present: "
                     + formatDuration(total) + (openShifts == 0 ? "" : " · " + openShifts + " open shift(s)")
                     + " · Dates use time-in in " + zone);
+        });
+    }
+
+    private void refreshDateSummary() {
+        if (role != UserRole.ADMIN || closing) return;
+        LocalDate date;
+        try {
+            date = LocalDate.parse(dateSummaryDate.getText().strip());
+        } catch (DateTimeParseException error) {
+            dateSummaryRefreshVersion++;
+            dateSummaryModel.setRowCount(0);
+            dateSummaryStatus.setText("Enter a valid date in YYYY-MM-DD format.");
+            return;
+        }
+        Instant from = date.atStartOfDay(zone).toInstant();
+        Instant until = date.plusDays(1).atStartOfDay(zone).toInstant();
+        Instant asOf = Instant.now();
+        long version = ++dateSummaryRefreshVersion;
+        dateSummaryStatus.setText("Loading date summary…");
+        runDatabase(() -> EmployeeSummaryService.summarize(
+                database.attendance(from, until, false), zone, asOf), summaries -> {
+            if (version != dateSummaryRefreshVersion) return;
+            dateSummaryModel.setRowCount(0);
+            Duration total = Duration.ZERO;
+            int shifts = 0;
+            int openShifts = 0;
+            for (EmployeeDailySummary summary : summaries) {
+                String timeIns = summary.shifts().stream()
+                        .map(record -> summaryTimeFormat.format(record.timeIn()))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                String timeOuts = summary.shifts().stream()
+                        .map(record -> record.timeOut() == null ? "—" : summaryTimeFormat.format(record.timeOut()))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                dateSummaryModel.addRow(new Object[]{summary.employeeNumber(), summary.employeeName(), timeIns, timeOuts,
+                        formatDuration(summary.presentDuration()), summary.inProgress() ? "In progress" : "Complete"});
+                total = total.plus(summary.presentDuration());
+                shifts += summary.shifts().size();
+                if (summary.inProgress()) openShifts++;
+            }
+            dateSummaryStatus.setText(date + " · " + summaries.size() + " employee(s) · " + shifts
+                    + " shift(s) · Total present: " + formatDuration(total)
+                    + (openShifts == 0 ? "" : " · " + openShifts + " open shift(s)")
+                    + " · " + zone);
         });
     }
 

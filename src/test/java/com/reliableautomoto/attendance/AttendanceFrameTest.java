@@ -38,28 +38,39 @@ class AttendanceFrameTest {
             await(() -> hasLabel(adminReference.get(), loaded) && hasLabel(attendanceReference.get(), loaded));
             JTabbedPane adminTabs = onEdt(() -> components(adminReference.get(), JTabbedPane.class).getFirst());
             JTabbedPane attendanceTabs = onEdt(() -> components(attendanceReference.get(), JTabbedPane.class).getFirst());
-            assertEquals(5, adminTabs.getTabCount());
+            assertEquals(6, adminTabs.getTabCount());
             assertEquals("  Employees  ", adminTabs.getTitleAt(1));
             assertEquals("  Employee summary  ", adminTabs.getTitleAt(2));
-            assertEquals("  Holidays  ", adminTabs.getTitleAt(3));
-            assertEquals("  Payroll  ", adminTabs.getTitleAt(4));
+            assertEquals("  Date summary  ", adminTabs.getTitleAt(3));
+            assertEquals("  Holidays  ", adminTabs.getTitleAt(4));
+            assertEquals("  Payroll  ", adminTabs.getTitleAt(5));
             assertEquals(1, attendanceTabs.getTabCount());
             assertEquals("  Attendance station  ", attendanceTabs.getTitleAt(0));
             assertTrue(components(adminReference.get(), JButton.class).stream()
                     .anyMatch(button -> "Change passwords".equals(button.getText())));
             assertFalse(components(attendanceReference.get(), JButton.class).stream()
                     .anyMatch(button -> "Change passwords".equals(button.getText())));
+            assertEquals(2, components(adminReference.get(), JButton.class).stream()
+                    .filter(button -> "Add past attendance".equals(button.getText())).count());
+            assertFalse(components(attendanceReference.get(), JButton.class).stream()
+                    .anyMatch(button -> "Add past attendance".equals(button.getText())));
             JComboBox<?> employeeChoice = components(adminReference.get(), JComboBox.class).stream()
                     .filter(combo -> combo.getItemCount() > 0
                             && "-- SELECT AN EMPLOYEE --".equals(combo.getItemAt(0).toString()))
                     .findFirst().orElseThrow();
             assertEquals("-- SELECT AN EMPLOYEE --", employeeChoice.getSelectedItem().toString());
             JTable summary = components(adminReference.get(), JTable.class).stream()
-                    .filter(table -> hasColumn(table, "Hours present")).findFirst().orElseThrow();
+                    .filter(table -> hasColumn(table, "Hours present") && !hasColumn(table, "Employee name"))
+                    .findFirst().orElseThrow();
             assertEquals(5, summary.getColumnCount());
             assertFalse(hasColumn(summary, "Employee name"));
             assertFalse(hasColumn(summary, "Employee #"));
             assertEquals(0, summary.getRowCount());
+            JTable dateSummary = components(adminReference.get(), JTable.class).stream()
+                    .filter(table -> hasColumn(table, "Hours present") && hasColumn(table, "Employee name"))
+                    .findFirst().orElseThrow();
+            assertEquals(6, dateSummary.getColumnCount());
+            assertTrue(hasColumn(dateSummary, "Employee #"));
         } finally {
             SwingUtilities.invokeAndWait(() -> {
                 adminReference.get().dispose();
