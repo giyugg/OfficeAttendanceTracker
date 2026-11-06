@@ -33,7 +33,10 @@ public final class CsvExporter {
     static String cell(String value) {
         // Quoting alone does not stop spreadsheet programs from evaluating formulas.
         String trimmed = value.stripLeading();
-        if (!trimmed.isEmpty() && "=+-@".indexOf(trimmed.charAt(0)) >= 0) value = "'" + value;
+        if (!trimmed.isEmpty() && "=+-@\t\r".indexOf(trimmed.charAt(0)) >= 0
+                || !value.isEmpty() && "\t\r".indexOf(value.charAt(0)) >= 0) {
+            value = "'" + value;
+        }
         return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 }

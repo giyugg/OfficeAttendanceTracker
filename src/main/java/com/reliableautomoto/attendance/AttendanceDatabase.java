@@ -162,12 +162,18 @@ public final class AttendanceDatabase {
     }
 
     public void addEmployee(String rawNumber, String rawName) throws SQLException {
+        addEmployee(rawNumber, rawName, 0);
+    }
+
+    public void addEmployee(String rawNumber, String rawName, long dailyPayCents) throws SQLException {
         String number = EmployeeNumbers.normalize(rawNumber);
         String name = validateName(rawName);
+        if (dailyPayCents < 0) throw new IllegalArgumentException("Daily pay cannot be negative.");
         try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
-                "INSERT INTO employees(employee_number, full_name) VALUES (?, ?) ON CONFLICT(employee_number) DO NOTHING")) {
+                "INSERT INTO employees(employee_number, full_name, daily_pay_cents) VALUES (?, ?, ?) ON CONFLICT(employee_number) DO NOTHING")) {
             statement.setString(1, number);
             statement.setString(2, name);
+            statement.setLong(3, dailyPayCents);
             if (statement.executeUpdate() == 0) {
                 throw new IllegalArgumentException("Employee number " + number + " already exists. Select it and choose Edit.");
             }

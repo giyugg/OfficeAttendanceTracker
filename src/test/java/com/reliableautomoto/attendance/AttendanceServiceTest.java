@@ -119,8 +119,12 @@ class AttendanceServiceTest {
     @Test void duplicateRegistrationDoesNotOverwriteEmployee() throws Exception {
         assertThrows(IllegalArgumentException.class, () -> database.addEmployee("00042", "Different name"));
         assertEquals("Maria Santos", database.employees().getFirst().name());
+        database.addEmployee("00099", "Pedro Penduko", 65_000);
+        assertEquals(65_000, database.employees().stream()
+                .filter(employee -> "00099".equals(employee.number())).findFirst().orElseThrow().dailyPayCents());
         assertThrows(IllegalArgumentException.class, () -> database.addEmployee("NEW", "  "));
         assertThrows(IllegalArgumentException.class, () -> database.addEmployee("NEW", "Line\nBreak"));
+        assertThrows(IllegalArgumentException.class, () -> database.addEmployee("NEW", "Valid Name", -1));
         database.updateEmployee("00042", "Maria Cruz", true);
         assertEquals("Maria Cruz", scan("00042", START).employeeName());
     }

@@ -135,6 +135,45 @@ class AttendanceFrameTest {
         }
     }
 
+    @Test void payrollComputationCommitsActiveManualDeductionCellEditor() throws Exception {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Desktop UI requires a graphical environment");
+        ZoneId zone = ZoneId.of("Asia/Manila");
+        LocalDate monday = LocalDate.of(2026, 11, 2);
+        Clock clock = Clock.fixed(monday.atTime(18, 0).atZone(zone).toInstant(), zone);
+        AttendanceDatabase database = new AttendanceDatabase(directory.resolve("payroll-ui.db"));
+        database.addEmployee("00042", "Maria Santos", 60_000);
+        database.recordScan("00042", monday.atTime(8, 0).atZone(zone).toInstant(), Duration.ZERO);
+        database.recordScan("00042", monday.atTime(17, 0).atZone(zone).toInstant(), Duration.ZERO);
+        AtomicReference<AttendanceFrame> reference = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            AttendanceFrame frame = new AttendanceFrame(database, new AttendanceService(database, clock), zone);
+            frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+            frame.addNotify();
+            frame.validate();
+            reference.set(frame);
+        });
+        AttendanceFrame frame = reference.get();
+        try {
+            JTable payrollTable = onEdt(() -> components(frame, JTable.class).stream()
+                    .filter(table -> hasColumn(table, "Manual deduction")).findFirst().orElseThrow());
+            JButton compute = onEdt(() -> components(frame, JButton.class).stream()
+                    .filter(button -> "Compute".equals(button.getText())).findFirst().orElseThrow());
+            SwingUtilities.invokeAndWait(compute::doClick);
+            await(() -> payrollTable.getRowCount() == 1 && "600.00".equals(payrollTable.getValueAt(0, 11)));
+
+            SwingUtilities.invokeAndWait(() -> {
+                assertTrue(payrollTable.editCellAt(0, 10));
+                JTextField editor = (JTextField) payrollTable.getEditorComponent();
+                editor.setText("50.00");
+                compute.doClick();
+            });
+            await(() -> !payrollTable.isEditing() && "50.00".equals(payrollTable.getValueAt(0, 10))
+                    && "550.00".equals(payrollTable.getValueAt(0, 11)));
+        } finally {
+            SwingUtilities.invokeAndWait(frame::dispose);
+        }
+    }
+
     private static void submit(JTextField input, String value) throws Exception {
         SwingUtilities.invokeAndWait(() -> { input.setText(value); input.postActionEvent(); });
     }

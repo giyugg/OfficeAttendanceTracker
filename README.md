@@ -57,7 +57,7 @@ java -jar target/attendance-tracker.jar "--db=C:\Attendance\attendance.db" --zon
 
 Sign in as `admin` to manage employees, holidays, and payroll. Holidays are entered manually; the application does not import or infer them. Each holiday has a unique date, name, paid/unpaid classification, and optional remarks.
 
-Payroll uses a standard 9:00 AM–5:00 PM, Monday–Friday schedule and these rules:
+Payroll uses a standard 8:00 AM–5:00 PM, Monday–Friday schedule and these rules:
 
 - Hourly rate is pay per day divided by 8.
 - Time-out minutes `00` through `44` round down to the hour; minutes `45` through `59` round up. The rule applies to early departures and overtime in every hour.

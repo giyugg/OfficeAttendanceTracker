@@ -26,7 +26,7 @@ class PayrollCalculatorTest {
 
     @Test void regularDayUsesDailyRateForAbsenceAndOneTimesHourlyRateForOvertime() throws Exception {
         AttendanceDatabase database = databaseWithEmployee();
-        scan(database, MONDAY, 9, 0);
+        scan(database, MONDAY, 8, 0);
         scan(database, MONDAY, 18, 0);
         PayrollLine line = service(database).preview(MONDAY, MONDAY, Map.of()).lines().getFirst();
 
@@ -40,8 +40,8 @@ class PayrollCalculatorTest {
 
     @Test void earlyTimeoutUsesTheSameRoundingRuleForCreditedRegularHours() throws Exception {
         AttendanceDatabase database = databaseWithEmployee();
-        scan(database, MONDAY, 9, 0);
-        scan(database, MONDAY, 16, 44);
+        scan(database, MONDAY, 8, 0);
+        scan(database, MONDAY, 15, 44);
         PayrollLine line = service(database).preview(MONDAY, MONDAY, Map.of()).lines().getFirst();
         assertEquals(new BigDecimal("7.00"), line.creditedRegularHours());
         assertEquals(new BigDecimal("1.00"), line.absentHours());
@@ -64,10 +64,36 @@ class PayrollCalculatorTest {
         assertMoney("0.00", unpaidLine.netPay());
     }
 
+    @Test void overtimeOnlyOnUnpaidHolidayDoesNotAddExpectedOrAbsentRegularHours() throws Exception {
+        AttendanceDatabase database = databaseWithEmployee();
+        database.addHoliday("Unpaid holiday", MONDAY, HolidayType.UNPAID, "");
+        scan(database, MONDAY, 17, 0);
+        scan(database, MONDAY, 19, 0);
+        PayrollLine line = service(database).preview(MONDAY, MONDAY, Map.of()).lines().getFirst();
+        assertEquals(0, line.paidScheduledDays());
+        assertEquals(0, line.expectedRegularHours().compareTo(BigDecimal.ZERO));
+        assertEquals(0, line.absentHours().compareTo(BigDecimal.ZERO));
+        assertMoney("0.00", line.absentDeduction());
+        assertEquals(2, line.overtimeHours());
+        assertMoney("150.00", line.overtimePay());
+        assertMoney("150.00", line.netPay());
+    }
+
+    @Test void overnightShiftCreditsFullRegularHoursOnStartDateAndRoundsEndDateOnly() throws Exception {
+        AttendanceDatabase database = databaseWithEmployee();
+        LocalDate tuesday = MONDAY.plusDays(1);
+        scan(database, MONDAY, 8, 0);
+        scan(database, tuesday, 15, 44);
+        PayrollLine line = service(database).preview(MONDAY, tuesday, Map.of()).lines().getFirst();
+        assertEquals(2, line.paidScheduledDays());
+        assertEquals(new BigDecimal("15.00"), line.creditedRegularHours());
+        assertEquals(new BigDecimal("1.00"), line.absentHours());
+    }
+
     @Test void workOnPaidHolidayIsNotDoublePaidButOvertimeRemainsSeparate() throws Exception {
         AttendanceDatabase database = databaseWithEmployee();
         database.addHoliday("Paid holiday", MONDAY, HolidayType.PAID, "");
-        scan(database, MONDAY, 9, 0);
+        scan(database, MONDAY, 8, 0);
         scan(database, MONDAY, 18, 0);
         PayrollLine line = service(database).preview(MONDAY, MONDAY, Map.of()).lines().getFirst();
         assertMoney("600.00", line.grossPay());

@@ -28,35 +28,35 @@ class ManualAttendanceServiceTest {
 
     @Test void administratorCanBackfillCompletedAttendanceOnPastDate() throws Exception {
         AttendanceRecord added = service.add("2026-001", LocalDate.of(2026, 10, 15),
-                LocalTime.of(9, 0), LocalTime.of(17, 0));
+                LocalTime.of(8, 0), LocalTime.of(17, 0));
 
         assertEquals("2026-001", added.employeeNumber());
         assertEquals("Acuna, Kyle A.", added.employeeName());
-        assertEquals("8h 00m 00s", added.duration());
+        assertEquals("9h 00m 00s", added.duration());
         assertEquals(added, database.attendance(null, null, false).getFirst());
     }
 
     @Test void todayFutureAndInvalidTimeRangesAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> service.add("2026-001", LocalDate.of(2026, 11, 5),
-                LocalTime.of(9, 0), LocalTime.of(17, 0)));
+                LocalTime.of(8, 0), LocalTime.of(17, 0)));
         assertThrows(IllegalArgumentException.class, () -> service.add("2026-001", LocalDate.of(2026, 11, 6),
-                LocalTime.of(9, 0), LocalTime.of(17, 0)));
+                LocalTime.of(8, 0), LocalTime.of(17, 0)));
         assertThrows(IllegalArgumentException.class, () -> service.add("2026-001", LocalDate.of(2026, 10, 15),
-                LocalTime.of(17, 0), LocalTime.of(9, 0)));
+                LocalTime.of(17, 0), LocalTime.of(8, 0)));
     }
 
     @Test void overlappingAndUnknownEmployeeAttendanceAreRejected() throws Exception {
-        service.add("2026-001", LocalDate.of(2026, 10, 15), LocalTime.of(9, 0), LocalTime.of(17, 0));
+        service.add("2026-001", LocalDate.of(2026, 10, 15), LocalTime.of(8, 0), LocalTime.of(17, 0));
 
         assertThrows(IllegalArgumentException.class, () -> service.add("2026-001", LocalDate.of(2026, 10, 15),
                 LocalTime.of(13, 0), LocalTime.of(18, 0)));
         assertThrows(IllegalArgumentException.class, () -> service.add("MISSING", LocalDate.of(2026, 10, 15),
-                LocalTime.of(9, 0), LocalTime.of(17, 0)));
+                LocalTime.of(8, 0), LocalTime.of(17, 0)));
         assertEquals(1, database.attendance(null, null, false).size());
     }
 
     @Test void adjacentShiftsRemainAllowed() throws Exception {
-        service.add("2026-001", LocalDate.of(2026, 10, 15), LocalTime.of(9, 0), LocalTime.of(12, 0));
+        service.add("2026-001", LocalDate.of(2026, 10, 15), LocalTime.of(8, 0), LocalTime.of(12, 0));
         service.add("2026-001", LocalDate.of(2026, 10, 15), LocalTime.of(12, 0), LocalTime.of(17, 0));
 
         assertEquals(2, database.attendance(null, null, false).size());

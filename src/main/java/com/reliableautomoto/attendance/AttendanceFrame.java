@@ -34,6 +34,7 @@ public final class AttendanceFrame extends JFrame {
     private static final Color RED = new Color(170, 43, 43);
     private final AttendanceDatabase database;
     private final AttendanceService service;
+    private final Clock clock;
     private final PayrollService payrollService;
     private final ManualAttendanceService manualAttendanceService;
     private final ZoneId zone;
@@ -116,12 +117,13 @@ public final class AttendanceFrame extends JFrame {
         super("Reliable AutoMoto | QR Attendance");
         this.database = database;
         this.service = service;
+        this.clock = service.clock();
         this.zone = zone;
         this.role = java.util.Objects.requireNonNull(role);
         this.authenticator = authenticator;
         this.onLogout = onLogout;
-        this.payrollService = new PayrollService(database, zone, Clock.systemUTC());
-        this.manualAttendanceService = new ManualAttendanceService(database, zone, Clock.systemUTC());
+        this.payrollService = new PayrollService(database, zone, clock);
+        this.manualAttendanceService = new ManualAttendanceService(database, zone, clock);
         timestampFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy  HH:mm:ss").withZone(zone);
         summaryTimeFormat = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(zone);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
@@ -374,7 +376,7 @@ public final class AttendanceFrame extends JFrame {
         JPanel top = transparent(new BorderLayout(8, 0));
         top.add(label("Attendance history", 17, Font.BOLD, NAVY), BorderLayout.WEST);
         JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-        dateInput.setText(LocalDate.now(zone).toString());
+        dateInput.setText(today().toString());
         dateInput.setEnabled(false);
         dateInput.setToolTipText("YYYY-MM-DD; shifts are selected by their time-in date.");
         controls.add(scope);
@@ -451,7 +453,7 @@ public final class AttendanceFrame extends JFrame {
         intro.add(label("Review the selected employee's time-ins, time-outs, and total hours by time-in date.", 13, Font.PLAIN, MUTED));
         top.add(intro, BorderLayout.CENTER);
 
-        LocalDate today = LocalDate.now(zone);
+        LocalDate today = today();
         summaryStart.setText(today.withDayOfMonth(1).toString());
         summaryEnd.setText(today.toString());
         summaryStart.setToolTipText("Start date (YYYY-MM-DD), inclusive");
@@ -478,7 +480,7 @@ public final class AttendanceFrame extends JFrame {
         JPanel bottom = transparent(new BorderLayout(10, 0));
         bottom.add(summaryStatus, BorderLayout.CENTER);
         JButton addPastAttendance = new JButton("Add past attendance");
-        addPastAttendance.addActionListener(event -> addPastAttendance(LocalDate.now(zone).minusDays(1)));
+        addPastAttendance.addActionListener(event -> addPastAttendance(today().minusDays(1)));
         bottom.add(addPastAttendance, BorderLayout.EAST);
         panel.add(bottom, BorderLayout.SOUTH);
         summaryStart.addActionListener(event -> refreshSummary());
@@ -503,10 +505,10 @@ public final class AttendanceFrame extends JFrame {
             if (selected != null && item.number().equals(selected.number())) selectedIndex = employee.getItemCount() - 1;
         }
         employee.setSelectedIndex(selectedIndex);
-        LocalDate initialDate = suggestedDate != null && suggestedDate.isBefore(LocalDate.now(zone))
-                ? suggestedDate : LocalDate.now(zone).minusDays(1);
+        LocalDate initialDate = suggestedDate != null && suggestedDate.isBefore(today())
+                ? suggestedDate : today().minusDays(1);
         JTextField date = new JTextField(initialDate.toString(), 12);
-        JTextField timeIn = new JTextField("09:00", 8);
+        JTextField timeIn = new JTextField("08:00", 8);
         JTextField timeOut = new JTextField("17:00", 8);
         JPanel form = new JPanel(new GridLayout(0, 1, 0, 7));
         form.add(new JLabel("Employee"));
@@ -528,7 +530,7 @@ public final class AttendanceFrame extends JFrame {
                 attendanceDate = LocalDate.parse(date.getText().strip());
                 attendanceTimeIn = LocalTime.parse(timeIn.getText().strip());
                 attendanceTimeOut = LocalTime.parse(timeOut.getText().strip());
-                if (!attendanceDate.isBefore(LocalDate.now(zone))) {
+                if (!attendanceDate.isBefore(today())) {
                     throw new IllegalArgumentException("Manual attendance can only be added for a past date.");
                 }
                 if (!attendanceTimeOut.isAfter(attendanceTimeIn)) {
@@ -580,7 +582,7 @@ public final class AttendanceFrame extends JFrame {
                 13, Font.PLAIN, MUTED));
         top.add(intro, BorderLayout.CENTER);
 
-        dateSummaryDate.setText(LocalDate.now(zone).toString());
+        dateSummaryDate.setText(today().toString());
         dateSummaryDate.setToolTipText("Attendance date (YYYY-MM-DD)");
         JPanel filters = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         filters.add(label("Date", 11, Font.PLAIN, MUTED));
@@ -607,9 +609,9 @@ public final class AttendanceFrame extends JFrame {
     private LocalDate selectedPastDate() {
         try {
             LocalDate selected = LocalDate.parse(dateSummaryDate.getText().strip());
-            return selected.isBefore(LocalDate.now(zone)) ? selected : LocalDate.now(zone).minusDays(1);
+            return selected.isBefore(today()) ? selected : today().minusDays(1);
         } catch (DateTimeParseException error) {
-            return LocalDate.now(zone).minusDays(1);
+            return today().minusDays(1);
         }
     }
 
@@ -650,7 +652,7 @@ public final class AttendanceFrame extends JFrame {
         title.add(label("Edit manual deductions in the table, then recompute or finalize.", 13, Font.PLAIN, MUTED));
         top.add(title, BorderLayout.WEST);
         JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-        LocalDate today = LocalDate.now(zone);
+        LocalDate today = today();
         payrollStart.setText(today.withDayOfMonth(1).toString());
         payrollEnd.setText(today.toString());
         controls.add(new JLabel("From"));
@@ -679,7 +681,7 @@ public final class AttendanceFrame extends JFrame {
 
     private void editHoliday(Holiday holiday) {
         JTextField name = new JTextField(holiday == null ? "" : holiday.name(), 25);
-        JTextField date = new JTextField(holiday == null ? LocalDate.now(zone).toString() : holiday.date().toString(), 12);
+        JTextField date = new JTextField(holiday == null ? today().toString() : holiday.date().toString(), 12);
         JComboBox<HolidayType> type = new JComboBox<>(HolidayType.values());
         if (holiday != null) type.setSelectedItem(holiday.type());
         JTextArea remarks = new JTextArea(holiday == null ? "" : holiday.remarks(), 3, 25);
@@ -730,6 +732,7 @@ public final class AttendanceFrame extends JFrame {
     }
 
     private void computePayroll(boolean finalize) {
+        if (payrollTable.isEditing() && !payrollTable.getCellEditor().stopCellEditing()) return;
         LocalDate start;
         LocalDate end;
         try {
@@ -820,10 +823,8 @@ public final class AttendanceFrame extends JFrame {
             String fullName = name.getText();
             boolean isActive = active.isSelected();
             runDatabase(() -> {
-                if (employee == null) {
-                    database.addEmployee(employeeNumber, fullName);
-                    database.setEmployeeDailyPay(employeeNumber, dailyPayCents);
-                } else database.updateEmployee(employee.number(), fullName, isActive, dailyPayCents);
+                if (employee == null) database.addEmployee(employeeNumber, fullName, dailyPayCents);
+                else database.updateEmployee(employee.number(), fullName, isActive, dailyPayCents);
                 return employeeNumber;
             }, ignored -> refreshData());
             break;
@@ -912,7 +913,7 @@ public final class AttendanceFrame extends JFrame {
     private void refreshData() {
         if (closing) return;
         int selection = scope.getSelectedIndex();
-        LocalDate today = LocalDate.now(zone);
+        LocalDate today = today();
         LocalDate selectedDate = today;
         if (selection == 1) {
             try { selectedDate = LocalDate.parse(dateInput.getText().strip()); }
@@ -1000,7 +1001,7 @@ public final class AttendanceFrame extends JFrame {
         }
         Instant from = start.atStartOfDay(zone).toInstant();
         Instant until = end.plusDays(1).atStartOfDay(zone).toInstant();
-        Instant asOf = Instant.now();
+        Instant asOf = clock.instant();
         long version = ++summaryRefreshVersion;
         summaryStatus.setText("Loading attendance summary…");
         runDatabase(() -> {
@@ -1044,7 +1045,7 @@ public final class AttendanceFrame extends JFrame {
         }
         Instant from = date.atStartOfDay(zone).toInstant();
         Instant until = date.plusDays(1).atStartOfDay(zone).toInstant();
-        Instant asOf = Instant.now();
+        Instant asOf = clock.instant();
         long version = ++dateSummaryRefreshVersion;
         dateSummaryStatus.setText("Loading date summary…");
         runDatabase(() -> EmployeeSummaryService.summarize(
@@ -1086,7 +1087,7 @@ public final class AttendanceFrame extends JFrame {
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Export visible attendance records");
         chooser.setFileFilter(new FileNameExtensionFilter("CSV files", "csv"));
-        chooser.setSelectedFile(new java.io.File("attendance-" + LocalDate.now(zone) + ".csv"));
+        chooser.setSelectedFile(new java.io.File("attendance-" + today() + ".csv"));
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
         Path path = chooser.getSelectedFile().toPath();
         if (!path.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".csv")) {
@@ -1125,7 +1126,11 @@ public final class AttendanceFrame extends JFrame {
     }
 
     private void updateClock() {
-        clockLabel.setText(DateTimeFormatter.ofPattern("EEE, MMM dd yyyy   HH:mm:ss").withZone(zone).format(Instant.now()));
+        clockLabel.setText(DateTimeFormatter.ofPattern("EEE, MMM dd yyyy   HH:mm:ss").withZone(zone).format(clock.instant()));
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(clock.withZone(zone));
     }
 
     private static void installSearch(JTable table, JTextField input) {

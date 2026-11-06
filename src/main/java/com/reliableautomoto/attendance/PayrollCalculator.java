@@ -8,7 +8,7 @@ import java.util.*;
 
 /** Pure payroll rules. Persistence and finalization are handled by {@link PayrollService}. */
 public final class PayrollCalculator {
-    public static final LocalTime REGULAR_START = LocalTime.of(9, 0);
+    public static final LocalTime REGULAR_START = LocalTime.of(8, 0);
     public static final LocalTime REGULAR_END = LocalTime.of(17, 0);
     public static final int REGULAR_HOURS_PER_DAY = 8;
 
@@ -42,7 +42,6 @@ public final class PayrollCalculator {
             if (!scheduled) continue;
             Holiday holiday = holidays.get(date);
             DayAttendance day = worked.getOrDefault(date, DayAttendance.EMPTY);
-            boolean performedWork = day.regularMinutes() > 0 || day.overtimeHours() > 0;
             if (holiday == null) {
                 paidDays++;
                 expectedDays++;
@@ -50,8 +49,8 @@ public final class PayrollCalculator {
             } else if (holiday.type() == HolidayType.PAID) {
                 // Daily pay already covers this day; attendance cannot add a second daily payment.
                 paidDays++;
-            } else if (performedWork) {
-                // An unpaid holiday becomes payable only when the employee actually works it.
+            } else if (day.regularMinutes() > 0) {
+                // An unpaid holiday becomes payable for regular hours only when regular work is performed.
                 paidDays++;
                 expectedDays++;
                 creditedHours = creditedHours.add(hours(day.regularMinutes()));
@@ -84,10 +83,13 @@ public final class PayrollCalculator {
             LocalDate last = out.toLocalDate().isAfter(end) ? end : out.toLocalDate();
             for (LocalDate date = first; !date.isAfter(last); date = date.plusDays(1)) {
                 ZonedDateTime regularStart = date.atTime(REGULAR_START).atZone(zone);
-                ZonedDateTime roundedOut = roundTimeOut(out.toLocalDateTime()).atZone(zone);
                 ZonedDateTime intervalStart = in.isAfter(regularStart) ? in : regularStart;
                 ZonedDateTime regularEnd = date.atTime(REGULAR_END).atZone(zone);
-                ZonedDateTime intervalEnd = roundedOut.isBefore(regularEnd) ? roundedOut : regularEnd;
+                ZonedDateTime intervalEnd = regularEnd;
+                if (!out.toLocalDate().isAfter(date)) {
+                    ZonedDateTime roundedOut = roundTimeOut(out.toLocalDateTime()).atZone(zone);
+                    if (roundedOut.isBefore(regularEnd)) intervalEnd = roundedOut;
+                }
                 if (intervalEnd.isAfter(intervalStart)) {
                     intervals.computeIfAbsent(date, ignored -> new ArrayList<>())
                             .add(new Interval(intervalStart.toInstant(), intervalEnd.toInstant()));

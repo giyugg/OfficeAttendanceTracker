@@ -31,6 +31,8 @@ class CsvExporterTest {
         assertEquals("\"'=1+1\"", CsvExporter.cell("=1+1"));
         assertEquals("\"'  @SUM(A1)\"", CsvExporter.cell("  @SUM(A1)"));
         assertEquals("\"'-2\"", CsvExporter.cell("-2"));
+        assertEquals("\"'\t=1+1\"", CsvExporter.cell("\t=1+1"));
+        assertEquals("\"'\r+1\"", CsvExporter.cell("\r+1"));
     }
 
     @Test void openShiftExportsWithoutAFabricatedTimeOut() throws Exception {

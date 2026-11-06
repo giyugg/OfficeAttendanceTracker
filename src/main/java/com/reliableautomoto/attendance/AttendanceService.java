@@ -14,6 +14,8 @@ public final class AttendanceService {
         this.clock = clock;
     }
 
+    public Clock clock() { return clock; }
+
     public ScanResult scan(String rawNumber) throws SQLException {
         String number;
         try { number = EmployeeNumbers.normalize(rawNumber); }
