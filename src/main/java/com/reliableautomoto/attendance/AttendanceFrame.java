@@ -77,16 +77,23 @@ public final class AttendanceFrame extends JFrame {
     private final JTable dateSummaryTable = table(dateSummaryModel);
     private final DatePicker dateSummaryDate;
     private final JLabel dateSummaryStatus = new JLabel("Choose a date to view attendance.");
+    private static final String[] PAYROLL_COLUMNS = {"Employee", "Daily pay", "Paid days",
+            "Expected hrs", "Credited hrs", "Absent hrs", "OT hrs", "Gross", "Absent deduction", "OT pay", "Manual deduction", "Net"};
     private final DefaultTableModel holidayModel = model("Date", "Holiday", "Type", "Remarks");
     private final JTable holidayTable = table(holidayModel);
-    private final DefaultTableModel payrollModel = new DefaultTableModel(new String[]{"Employee", "Daily pay", "Paid days",
-            "Expected hrs", "Credited hrs", "Absent hrs", "OT hrs", "Gross", "Absent deduction", "OT pay", "Manual deduction", "Net"}, 0) {
+    private final DefaultTableModel payrollModel = new DefaultTableModel(PAYROLL_COLUMNS, 0) {
         @Override public boolean isCellEditable(int row, int column) { return column == 10; }
     };
     private final JTable payrollTable = table(payrollModel);
     private final DatePicker payrollStart;
     private final DatePicker payrollEnd;
     private final JLabel payrollStatus = new JLabel("Choose a payroll period.");
+    private final DefaultTableModel savedPayrollModel = new DefaultTableModel(PAYROLL_COLUMNS, 0) {
+        @Override public boolean isCellEditable(int row, int column) { return column == 10; }
+    };
+    private final JTable savedPayrollTable = table(savedPayrollModel);
+    private final JComboBox<SavedPayrollChoice> savedPayrollChoice = new JComboBox<>();
+    private final JLabel savedPayrollStatus = new JLabel("No saved payrolls yet. Save a payroll from the Payroll tab.");
     private final JComboBox<String> scope = new JComboBox<>(new String[]{"Today", "Selected date", "All records", "Currently in"});
     private final DatePicker dateInput;
     private final JLabel historyCount = new JLabel("No attendance records yet");
@@ -94,13 +101,18 @@ public final class AttendanceFrame extends JFrame {
     private List<AttendanceRecord> displayedRecords = List.of();
     private List<Employee> displayedEmployees = List.of();
     private List<Holiday> displayedHolidays = List.of();
+    private List<PayrollReport> displayedSavedPayrolls = List.of();
     private PayrollReport displayedPayroll;
+    private PayrollReport displayedSavedPayroll;
     private final Timer clockTimer;
     private final Timer refreshTimer;
     private long refreshVersion;
     private long summaryRefreshVersion;
     private long dateSummaryRefreshVersion;
     private boolean updatingSummaryEmployees;
+    private boolean updatingSavedPayrollChoices;
+    private boolean updatingSavedPayrollTable;
+    private boolean committingSavedPayrollEdit;
     private boolean closing;
 
     public AttendanceFrame(AttendanceDatabase database, AttendanceService service, ZoneId zone) {
@@ -151,6 +163,7 @@ public final class AttendanceFrame extends JFrame {
             tabs.addTab("  Date summary  ", dateSummaryPanel());
             tabs.addTab("  Holidays  ", holidaysPanel());
             tabs.addTab("  Payroll  ", payrollPanel());
+            tabs.addTab("  Saved payrolls  ", savedPayrollsPanel());
         }
         root.add(tabs, BorderLayout.CENTER);
         JLabel footer = new JLabel("Database: " + database.path() + "   |   Timezone: " + zone);
@@ -647,7 +660,7 @@ public final class AttendanceFrame extends JFrame {
         JPanel top = transparent(new BorderLayout(12, 0));
         JPanel title = transparent(new GridLayout(2, 1, 0, 4));
         title.add(label("Salary computation", 22, Font.BOLD, NAVY));
-        title.add(label("Edit manual deductions in the table, then recompute or finalize.", 13, Font.PLAIN, MUTED));
+        title.add(label("Edit manual deductions in the table, then recompute or save to Saved payrolls.", 13, Font.PLAIN, MUTED));
         top.add(title, BorderLayout.WEST);
         JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         controls.add(new JLabel("From"));
@@ -666,6 +679,50 @@ public final class AttendanceFrame extends JFrame {
         payrollStatus.setFont(font(12, Font.PLAIN));
         payrollStatus.setForeground(MUTED);
         panel.add(payrollStatus, BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel savedPayrollsPanel() {
+        JPanel panel = card(new BorderLayout(0, 12));
+        JPanel top = transparent(new BorderLayout(12, 0));
+        JPanel title = transparent(new GridLayout(2, 1, 0, 4));
+        title.add(label("Saved payrolls", 22, Font.BOLD, NAVY));
+        title.add(label("Select a saved payroll period to review it or update manual deductions.", 13, Font.PLAIN, MUTED));
+        top.add(title, BorderLayout.WEST);
+
+        savedPayrollChoice.setPrototypeDisplayValue(new SavedPayrollChoice(null,
+                "2026-11-01 (Sun) to 2026-11-15 (Sun) · Saved Nov 15, 2026  18:00:00"));
+        savedPayrollChoice.addItem(new SavedPayrollChoice(null, "-- NO SAVED PAYROLLS --"));
+        savedPayrollChoice.addActionListener(event -> {
+            if (updatingSavedPayrollChoices) return;
+            SavedPayrollChoice selected = (SavedPayrollChoice) savedPayrollChoice.getSelectedItem();
+            showSavedPayroll(selected == null ? null : selected.report());
+        });
+
+        savedPayrollModel.addTableModelListener(event -> {
+            if (!updatingSavedPayrollTable && !committingSavedPayrollEdit
+                    && event.getType() == javax.swing.event.TableModelEvent.UPDATE
+                    && event.getColumn() == 10) {
+                persistSavedPayrollDeductions();
+            }
+        });
+
+        JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        controls.add(label("Saved period", 11, Font.PLAIN, MUTED));
+        controls.add(savedPayrollChoice);
+        JButton saveDeductions = new JButton("Save deductions");
+        saveDeductions.addActionListener(event -> saveSavedPayrollDeductions());
+        JButton refresh = new JButton("Refresh");
+        refresh.addActionListener(event -> refreshSavedPayrolls(
+                displayedSavedPayroll == null ? null : displayedSavedPayroll.id()));
+        controls.add(saveDeductions);
+        controls.add(refresh);
+        top.add(controls, BorderLayout.EAST);
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(savedPayrollTable), BorderLayout.CENTER);
+        savedPayrollStatus.setFont(font(12, Font.PLAIN));
+        savedPayrollStatus.setForeground(MUTED);
+        panel.add(savedPayrollStatus, BorderLayout.SOUTH);
         return panel;
     }
 
@@ -726,49 +783,164 @@ public final class AttendanceFrame extends JFrame {
         java.util.Map<String, BigDecimal> deductions;
         try {
             deductions = displayedPayroll != null && displayedPayroll.periodStart().equals(start)
-                    && displayedPayroll.periodEnd().equals(end) ? payrollDeductions() : java.util.Map.of();
+                    && displayedPayroll.periodEnd().equals(end) ? payrollDeductions(payrollModel, displayedPayroll) : java.util.Map.of();
         } catch (IllegalArgumentException error) {
             JOptionPane.showMessageDialog(this, error.getMessage(), "Check manual deductions", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (finalize && JOptionPane.showConfirmDialog(this,
-                "Finalized payroll preserves this calculation even if attendance, pay rates, or holidays later change. Continue?",
-                "Finalize payroll", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
-        payrollStatus.setText(finalize ? "Finalizing payroll..." : "Computing live payroll preview...");
+        payrollStatus.setText(finalize ? "Saving payroll..." : "Computing live payroll preview...");
         LocalDate periodStart = start;
         LocalDate periodEnd = end;
-        runDatabase(() -> finalize ? payrollService.finalizePayroll(periodStart, periodEnd, deductions)
-                        : payrollService.preview(periodStart, periodEnd, deductions), this::showPayroll);
+        boolean updateSaved = finalize || (displayedPayroll != null && displayedPayroll.finalized()
+                && displayedPayroll.periodStart().equals(periodStart)
+                && displayedPayroll.periodEnd().equals(periodEnd)
+                && !deductions.isEmpty());
+        if (updateSaved) {
+            runDatabase(() -> {
+                PayrollReport report = payrollService.finalizePayroll(periodStart, periodEnd, deductions);
+                return new SavedPayrollUpdate(report, payrollService.savedPayrolls());
+            }, update -> {
+                showPayroll(update.report());
+                applySavedPayrolls(update.savedPayrolls(), update.report().id());
+            });
+        } else {
+            runDatabase(() -> payrollService.preview(periodStart, periodEnd, deductions), this::showPayroll);
+        }
     }
 
-    private java.util.Map<String, BigDecimal> payrollDeductions() {
-        if (displayedPayroll == null || payrollModel.getRowCount() != displayedPayroll.lines().size()) return java.util.Map.of();
+    private static java.util.Map<String, BigDecimal> payrollDeductions(DefaultTableModel model, PayrollReport report) {
+        if (report == null || model.getRowCount() != report.lines().size()) return java.util.Map.of();
         java.util.Map<String, BigDecimal> values = new java.util.HashMap<>();
-        for (int row = 0; row < payrollModel.getRowCount(); row++) {
-            String raw = String.valueOf(payrollModel.getValueAt(row, 10)).replace(",", "").strip();
+        for (int row = 0; row < model.getRowCount(); row++) {
+            String raw = String.valueOf(model.getValueAt(row, 10)).replace(",", "").strip();
             BigDecimal value;
             try { value = raw.isEmpty() ? BigDecimal.ZERO : new BigDecimal(raw); }
             catch (NumberFormatException error) { throw new IllegalArgumentException("Manual deduction on row " + (row + 1) + " is not a valid amount."); }
             if (value.signum() < 0 || value.scale() > 2) throw new IllegalArgumentException("Manual deductions must be non-negative amounts with at most two decimals.");
-            values.put(displayedPayroll.lines().get(row).employeeNumber(), value);
+            values.put(report.lines().get(row).employeeNumber(), value);
         }
         return values;
     }
 
     private void showPayroll(PayrollReport report) {
         displayedPayroll = report;
-        payrollModel.setRowCount(0);
+        populatePayrollModel(payrollModel, report);
+        payrollStatus.setText(report.finalized()
+                ? "Saved to Saved payrolls (" + timestampFormat.format(report.computedAt()) + ") — manual deductions remain editable."
+                : "Live preview - holiday, attendance, pay-rate, and deduction changes are reflected when recomputed.");
+        payrollStatus.setForeground(report.finalized() ? GREEN : MUTED);
+        payrollTable.setEnabled(true);
+    }
+
+    private void saveSavedPayrollDeductions() {
+        if (displayedSavedPayroll == null) {
+            JOptionPane.showMessageDialog(this, "Select a saved payroll first.");
+            return;
+        }
+        committingSavedPayrollEdit = true;
+        try {
+            if (savedPayrollTable.isEditing() && !savedPayrollTable.getCellEditor().stopCellEditing()) return;
+        } finally {
+            committingSavedPayrollEdit = false;
+        }
+        persistSavedPayrollDeductions();
+    }
+
+    private void persistSavedPayrollDeductions() {
+        if (displayedSavedPayroll == null) return;
+        java.util.Map<String, BigDecimal> deductions;
+        try {
+            deductions = payrollDeductions(savedPayrollModel, displayedSavedPayroll);
+        } catch (IllegalArgumentException error) {
+            JOptionPane.showMessageDialog(this, error.getMessage(), "Check manual deductions", JOptionPane.WARNING_MESSAGE);
+            showSavedPayroll(displayedSavedPayroll);
+            return;
+        }
+        long payrollId = displayedSavedPayroll.id();
+        savedPayrollStatus.setText("Saving manual deductions...");
+        runDatabase(() -> {
+            PayrollReport updated = payrollService.updateManualDeductions(payrollId, deductions);
+            return new SavedPayrollUpdate(updated, payrollService.savedPayrolls());
+        }, update -> {
+            applySavedPayrolls(update.savedPayrolls(), update.report().id());
+            if (displayedPayroll != null
+                    && displayedPayroll.periodStart().equals(update.report().periodStart())
+                    && displayedPayroll.periodEnd().equals(update.report().periodEnd())) {
+                showPayroll(update.report());
+            }
+        });
+    }
+
+    private void refreshSavedPayrolls(Long preferredId) {
+        if (role != UserRole.ADMIN || closing) return;
+        runDatabase(payrollService::savedPayrolls, saved -> applySavedPayrolls(saved, preferredId));
+    }
+
+    private void applySavedPayrolls(List<PayrollReport> savedPayrolls, Long preferredId) {
+        if (role != UserRole.ADMIN) return;
+        displayedSavedPayrolls = savedPayrolls;
+        Long targetId = preferredId != null ? preferredId
+                : (displayedSavedPayroll != null ? displayedSavedPayroll.id() : null);
+        updatingSavedPayrollChoices = true;
+        PayrollReport selectedReport = null;
+        try {
+            savedPayrollChoice.removeAllItems();
+            if (savedPayrolls.isEmpty()) {
+                savedPayrollChoice.addItem(new SavedPayrollChoice(null, "-- NO SAVED PAYROLLS --"));
+                savedPayrollChoice.setSelectedIndex(0);
+            } else {
+                int selectedIndex = 0;
+                for (int index = 0; index < savedPayrolls.size(); index++) {
+                    PayrollReport report = savedPayrolls.get(index);
+                    String label = DatePicker.formatWithDayOfWeek(report.periodStart()) + " to "
+                            + DatePicker.formatWithDayOfWeek(report.periodEnd()) + "  ·  Saved "
+                            + timestampFormat.format(report.computedAt());
+                    savedPayrollChoice.addItem(new SavedPayrollChoice(report, label));
+                    if (targetId != null && report.id() == targetId) {
+                        selectedIndex = index;
+                    }
+                }
+                savedPayrollChoice.setSelectedIndex(selectedIndex);
+                selectedReport = savedPayrolls.get(selectedIndex);
+            }
+        } finally {
+            updatingSavedPayrollChoices = false;
+        }
+        if (!savedPayrollTable.isEditing() || preferredId != null) {
+            showSavedPayroll(selectedReport);
+        }
+    }
+
+    private void showSavedPayroll(PayrollReport report) {
+        displayedSavedPayroll = report;
+        updatingSavedPayrollTable = true;
+        try {
+            if (report == null) {
+                savedPayrollModel.setRowCount(0);
+                savedPayrollStatus.setText("No saved payrolls yet. Save a payroll from the Payroll tab.");
+                savedPayrollStatus.setForeground(MUTED);
+            } else {
+                populatePayrollModel(savedPayrollModel, report);
+                savedPayrollStatus.setText("Saved payroll for " + DatePicker.formatWithDayOfWeek(report.periodStart())
+                        + " to " + DatePicker.formatWithDayOfWeek(report.periodEnd())
+                        + " · Saved " + timestampFormat.format(report.computedAt())
+                        + " · Manual deductions remain editable.");
+                savedPayrollStatus.setForeground(GREEN);
+            }
+        } finally {
+            updatingSavedPayrollTable = false;
+        }
+        savedPayrollTable.setEnabled(true);
+    }
+
+    private static void populatePayrollModel(DefaultTableModel model, PayrollReport report) {
+        model.setRowCount(0);
         for (PayrollLine line : report.lines()) {
-            payrollModel.addRow(new Object[]{line.employeeName() + " (" + line.employeeNumber() + ")", money(line.dailyPay()),
+            model.addRow(new Object[]{line.employeeName() + " (" + line.employeeNumber() + ")", money(line.dailyPay()),
                     line.paidScheduledDays(), line.expectedRegularHours(), line.creditedRegularHours(), line.absentHours(),
                     line.overtimeHours(), money(line.grossPay()), money(line.absentDeduction()), money(line.overtimePay()),
                     money(line.manualDeductions()), money(line.netPay())});
         }
-        payrollStatus.setText(report.finalized()
-                ? "FINALIZED - saved snapshot from " + timestampFormat.format(report.computedAt()) + "; later configuration changes do not alter it."
-                : "Live preview - holiday, attendance, pay-rate, and deduction changes are reflected until finalization.");
-        payrollStatus.setForeground(report.finalized() ? GREEN : MUTED);
-        payrollTable.setEnabled(!report.finalized());
     }
 
     private static String money(BigDecimal value) { return value.setScale(2, RoundingMode.HALF_UP).toPlainString(); }
@@ -902,7 +1074,8 @@ public final class AttendanceFrame extends JFrame {
         runDatabase(() -> new Snapshot(database.employees(), database.attendance(from, until, selection == 3),
                 database.attendance(null, null, true).size(), database.attendance(today.atStartOfDay(zone).toInstant(),
                 today.plusDays(1).atStartOfDay(zone).toInstant(), false).size(),
-                role == UserRole.ADMIN ? database.holidays(null, null) : List.of()), snapshot -> {
+                role == UserRole.ADMIN ? database.holidays(null, null) : List.of(),
+                role == UserRole.ADMIN ? database.savedPayrolls() : List.of()), snapshot -> {
             if (version != refreshVersion) return;
             displayedEmployees = snapshot.employees();
             displayedRecords = snapshot.records();
@@ -916,6 +1089,7 @@ public final class AttendanceFrame extends JFrame {
             for (Holiday holiday : displayedHolidays) {
                 holidayModel.addRow(new Object[]{DatePicker.formatWithDayOfWeek(holiday.date()), holiday.name(), holiday.type(), holiday.remarks()});
             }
+            applySavedPayrolls(snapshot.savedPayrolls(), null);
             attendanceModel.setRowCount(0);
             for (AttendanceRecord record : displayedRecords) {
                 attendanceModel.addRow(new Object[]{record.employeeNumber(), record.employeeName(),
@@ -1161,7 +1335,13 @@ public final class AttendanceFrame extends JFrame {
     }
 
     private record Snapshot(List<Employee> employees, List<AttendanceRecord> records, int openCount, int todayCount,
-                            List<Holiday> holidays) { }
+                            List<Holiday> holidays, List<PayrollReport> savedPayrolls) { }
+
+    private record SavedPayrollUpdate(PayrollReport report, List<PayrollReport> savedPayrolls) { }
+
+    private record SavedPayrollChoice(PayrollReport report, String label) {
+        @Override public String toString() { return label; }
+    }
 
     private record SummaryEmployeeChoice(String number, String name) {
         @Override public String toString() { return number == null ? name : number + " — " + name; }

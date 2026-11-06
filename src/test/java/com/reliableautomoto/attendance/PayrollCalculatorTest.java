@@ -102,7 +102,7 @@ class PayrollCalculatorTest {
         assertMoney("675.00", line.netPay());
     }
 
-    @Test void finalizedPayrollPreservesItsSnapshotAcrossConfigurationChanges() throws Exception {
+    @Test void savedPayrollPreservesCalculationWhileAllowingManualDeductionEditsAndLivePreviews() throws Exception {
         AttendanceDatabase database = databaseWithEmployee();
         Holiday holiday = database.addHoliday("Paid holiday", MONDAY, HolidayType.PAID, "");
         PayrollService service = service(database);
@@ -112,11 +112,29 @@ class PayrollCalculatorTest {
 
         database.updateHoliday(holiday.id(), "Now unpaid", MONDAY, HolidayType.UNPAID, "changed later");
         database.setEmployeeDailyPay("E-1", 100_000);
-        PayrollReport preserved = service.preview(MONDAY, MONDAY, Map.of());
+
+        PayrollReport livePreview = service.preview(MONDAY, MONDAY, Map.of());
+        assertFalse(livePreview.finalized());
+        assertMoney("1000.00", livePreview.lines().getFirst().dailyPay());
+        assertMoney("0.00", livePreview.lines().getFirst().netPay());
+
+        PayrollReport preserved = service.savedPayrolls().getFirst();
         assertEquals(finalized.id(), preserved.id());
         assertMoney("600.00", preserved.lines().getFirst().dailyPay());
         assertMoney("25.00", preserved.lines().getFirst().manualDeductions());
         assertMoney("575.00", preserved.lines().getFirst().netPay());
+
+        PayrollReport updated = service.updateManualDeductions(finalized.id(), Map.of("E-1", new BigDecimal("40.00")));
+        assertEquals(finalized.id(), updated.id());
+        assertMoney("600.00", updated.lines().getFirst().dailyPay());
+        assertMoney("40.00", updated.lines().getFirst().manualDeductions());
+        assertMoney("560.00", updated.lines().getFirst().netPay());
+
+        PayrollReport updatedViaFinalize = service.finalizePayroll(MONDAY, MONDAY, Map.of("E-1", new BigDecimal("10.00")));
+        assertEquals(finalized.id(), updatedViaFinalize.id());
+        assertMoney("600.00", updatedViaFinalize.lines().getFirst().dailyPay());
+        assertMoney("10.00", updatedViaFinalize.lines().getFirst().manualDeductions());
+        assertMoney("590.00", updatedViaFinalize.lines().getFirst().netPay());
     }
 
     private AttendanceDatabase databaseWithEmployee() throws Exception {

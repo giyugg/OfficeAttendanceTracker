@@ -7,7 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Computes live previews and creates immutable finalized payroll snapshots. */
+/** Computes live previews and manages saved payroll runs with editable manual deductions. */
 public final class PayrollService {
     private final AttendanceDatabase database;
     private final ZoneId zone;
@@ -21,8 +21,6 @@ public final class PayrollService {
 
     public PayrollReport preview(LocalDate start, LocalDate end, Map<String, BigDecimal> manualDeductions) throws SQLException {
         validatePeriod(start, end);
-        PayrollReport finalized = database.finalizedPayroll(start, end);
-        if (finalized != null) return finalized;
         Instant until = end.plusDays(1).atStartOfDay(zone).toInstant();
         List<AttendanceRecord> records = database.attendance(null, until, false);
         Map<LocalDate, Holiday> holidays = new HashMap<>();
@@ -39,9 +37,37 @@ public final class PayrollService {
 
     public PayrollReport finalizePayroll(LocalDate start, LocalDate end,
                                          Map<String, BigDecimal> manualDeductions) throws SQLException {
+        validatePeriod(start, end);
+        PayrollReport existing = database.finalizedPayroll(start, end);
+        if (existing != null) {
+            if (manualDeductions == null || manualDeductions.isEmpty()) return existing;
+            return database.updatePayrollManualDeductions(existing.id(), manualDeductions);
+        }
         PayrollReport report = preview(start, end, manualDeductions);
-        if (report.finalized()) return report;
         return database.finalizePayroll(report, clock.instant());
+    }
+
+    public PayrollReport savePayroll(LocalDate start, LocalDate end,
+                                     Map<String, BigDecimal> manualDeductions) throws SQLException {
+        return finalizePayroll(start, end, manualDeductions);
+    }
+
+    public PayrollReport savedPayroll(LocalDate start, LocalDate end) throws SQLException {
+        validatePeriod(start, end);
+        return database.finalizedPayroll(start, end);
+    }
+
+    public PayrollReport savedPayroll(long id) throws SQLException {
+        return database.savedPayroll(id);
+    }
+
+    public List<PayrollReport> savedPayrolls() throws SQLException {
+        return database.savedPayrolls();
+    }
+
+    public PayrollReport updateManualDeductions(long payrollRunId,
+                                                Map<String, BigDecimal> manualDeductions) throws SQLException {
+        return database.updatePayrollManualDeductions(payrollRunId, manualDeductions);
     }
 
     private static void validatePeriod(LocalDate start, LocalDate end) {

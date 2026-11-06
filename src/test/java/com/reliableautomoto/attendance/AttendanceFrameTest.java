@@ -38,12 +38,13 @@ class AttendanceFrameTest {
             await(() -> hasLabel(adminReference.get(), loaded) && hasLabel(attendanceReference.get(), loaded));
             JTabbedPane adminTabs = onEdt(() -> components(adminReference.get(), JTabbedPane.class).getFirst());
             JTabbedPane attendanceTabs = onEdt(() -> components(attendanceReference.get(), JTabbedPane.class).getFirst());
-            assertEquals(6, adminTabs.getTabCount());
+            assertEquals(7, adminTabs.getTabCount());
             assertEquals("  Employees  ", adminTabs.getTitleAt(1));
             assertEquals("  Employee summary  ", adminTabs.getTitleAt(2));
             assertEquals("  Date summary  ", adminTabs.getTitleAt(3));
             assertEquals("  Holidays  ", adminTabs.getTitleAt(4));
             assertEquals("  Payroll  ", adminTabs.getTitleAt(5));
+            assertEquals("  Saved payrolls  ", adminTabs.getTitleAt(6));
             assertEquals(1, attendanceTabs.getTabCount());
             assertEquals("  Attendance station  ", attendanceTabs.getTitleAt(0));
             assertTrue(components(adminReference.get(), JButton.class).stream()
@@ -156,8 +157,14 @@ class AttendanceFrameTest {
         try {
             JTable payrollTable = onEdt(() -> components(frame, JTable.class).stream()
                     .filter(table -> hasColumn(table, "Manual deduction")).findFirst().orElseThrow());
+            JTable savedPayrollTable = onEdt(() -> components(frame, JTable.class).stream()
+                    .filter(table -> hasColumn(table, "Manual deduction")).skip(1).findFirst().orElseThrow());
             JButton compute = onEdt(() -> components(frame, JButton.class).stream()
                     .filter(button -> "Compute".equals(button.getText())).findFirst().orElseThrow());
+            JButton finalize = onEdt(() -> components(frame, JButton.class).stream()
+                    .filter(button -> "Finalize payroll".equals(button.getText())).findFirst().orElseThrow());
+            JButton saveDeductions = onEdt(() -> components(frame, JButton.class).stream()
+                    .filter(button -> "Save deductions".equals(button.getText())).findFirst().orElseThrow());
             SwingUtilities.invokeAndWait(compute::doClick);
             await(() -> payrollTable.getRowCount() == 1 && "600.00".equals(payrollTable.getValueAt(0, 11)));
 
@@ -169,6 +176,26 @@ class AttendanceFrameTest {
             });
             await(() -> !payrollTable.isEditing() && "50.00".equals(payrollTable.getValueAt(0, 10))
                     && "550.00".equals(payrollTable.getValueAt(0, 11)));
+
+            SwingUtilities.invokeAndWait(finalize::doClick);
+            await(() -> savedPayrollTable.getRowCount() == 1
+                    && "50.00".equals(savedPayrollTable.getValueAt(0, 10))
+                    && "550.00".equals(savedPayrollTable.getValueAt(0, 11)));
+            assertTrue(onEdt(payrollTable::isEnabled));
+            assertTrue(onEdt(savedPayrollTable::isEnabled));
+
+            SwingUtilities.invokeAndWait(() -> {
+                assertTrue(savedPayrollTable.editCellAt(0, 10));
+                JTextField editor = (JTextField) savedPayrollTable.getEditorComponent();
+                editor.setText("75.00");
+                saveDeductions.doClick();
+            });
+            await(() -> !savedPayrollTable.isEditing()
+                    && "75.00".equals(savedPayrollTable.getValueAt(0, 10))
+                    && "525.00".equals(savedPayrollTable.getValueAt(0, 11))
+                    && "75.00".equals(payrollTable.getValueAt(0, 10))
+                    && "525.00".equals(payrollTable.getValueAt(0, 11)));
+            assertEquals("525.00", database.savedPayrolls().getFirst().lines().getFirst().netPay().toPlainString());
         } finally {
             SwingUtilities.invokeAndWait(frame::dispose);
         }

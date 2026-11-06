@@ -9,7 +9,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static com.reliableautomoto.attendance.ScanResult.Status.*;
 
@@ -464,17 +466,32 @@ public final class AttendanceDatabase {
     }
 
     public PayrollReport finalizedPayroll(LocalDate start, LocalDate end) throws SQLException {
-        try (Connection connection = connect(); PreparedStatement run = connection.prepareStatement(
-                "SELECT id, finalized_at FROM payroll_runs WHERE period_start = ? AND period_end = ?")) {
-            run.setString(1, start.toString());
-            run.setString(2, end.toString());
-            try (ResultSet row = run.executeQuery()) {
-                if (!row.next()) return null;
-                long id = row.getLong(1);
-                Instant finalizedAt = Instant.ofEpochMilli(row.getLong(2));
-                return new PayrollReport(id, start, end, true, finalizedAt, payrollLines(connection, id));
+        try (Connection connection = connect()) {
+            return finalizedPayroll(connection, start, end);
+        }
+    }
+
+    public PayrollReport savedPayroll(long id) throws SQLException {
+        try (Connection connection = connect()) {
+            return savedPayroll(connection, id);
+        }
+    }
+
+    public List<PayrollReport> savedPayrolls() throws SQLException {
+        List<PayrollReport> reports = new ArrayList<>();
+        try (Connection connection = connect();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT id, period_start, period_end, finalized_at FROM payroll_runs ORDER BY period_start DESC, period_end DESC, id DESC");
+             ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                long id = rows.getLong(1);
+                LocalDate start = LocalDate.parse(rows.getString(2));
+                LocalDate end = LocalDate.parse(rows.getString(3));
+                Instant finalizedAt = Instant.ofEpochMilli(rows.getLong(4));
+                reports.add(new PayrollReport(id, start, end, true, finalizedAt, payrollLines(connection, id)));
             }
         }
+        return List.copyOf(reports);
     }
 
     public PayrollReport finalizePayroll(PayrollReport preview, Instant finalizedAt) throws SQLException {
@@ -483,8 +500,13 @@ public final class AttendanceDatabase {
             try {
                 PayrollReport existing = finalizedPayroll(connection, preview.periodStart(), preview.periodEnd());
                 if (existing != null) {
+                    Map<String, BigDecimal> deductions = new HashMap<>();
+                    for (PayrollLine line : preview.lines()) {
+                        deductions.put(line.employeeNumber(), line.manualDeductions());
+                    }
+                    PayrollReport updated = updatePayrollManualDeductions(connection, existing, deductions);
                     transaction.execute("COMMIT");
-                    return existing;
+                    return updated;
                 }
                 long runId;
                 try (PreparedStatement statement = connection.prepareStatement(
@@ -527,13 +549,65 @@ public final class AttendanceDatabase {
                     statement.executeBatch();
                 }
                 transaction.execute("COMMIT");
-                return new PayrollReport(runId, preview.periodStart(), preview.periodEnd(), true, finalizedAt, preview.lines());
+                return new PayrollReport(runId, preview.periodStart(), preview.periodEnd(), true, finalizedAt, payrollLines(connection, runId));
             } catch (SQLException | RuntimeException error) {
                 try { transaction.execute("ROLLBACK"); }
                 catch (SQLException rollbackError) { error.addSuppressed(rollbackError); }
                 throw error;
             }
         }
+    }
+
+    public PayrollReport updatePayrollManualDeductions(long payrollRunId, Map<String, BigDecimal> manualDeductions) throws SQLException {
+        try (Connection connection = connect(); Statement transaction = connection.createStatement()) {
+            transaction.execute("BEGIN IMMEDIATE");
+            try {
+                PayrollReport existing = savedPayroll(connection, payrollRunId);
+                if (existing == null) throw new IllegalArgumentException("Saved payroll no longer exists.");
+                PayrollReport updated = updatePayrollManualDeductions(connection, existing,
+                        manualDeductions == null ? Map.of() : manualDeductions);
+                transaction.execute("COMMIT");
+                return updated;
+            } catch (SQLException | RuntimeException error) {
+                try { transaction.execute("ROLLBACK"); }
+                catch (SQLException rollbackError) { error.addSuppressed(rollbackError); }
+                throw error;
+            }
+        }
+    }
+
+    private static PayrollReport updatePayrollManualDeductions(Connection connection, PayrollReport existing,
+                                                               Map<String, BigDecimal> manualDeductions) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement("""
+                UPDATE payroll_lines
+                SET manual_deductions_cents = ?, net_pay_cents = ?
+                WHERE payroll_run_id = ? AND employee_number = ?
+                """)) {
+            for (PayrollLine line : existing.lines()) {
+                BigDecimal rawDeduction = manualDeductions.getOrDefault(line.employeeNumber(), line.manualDeductions());
+                BigDecimal deduction = validateManualDeduction(rawDeduction);
+                BigDecimal netPay = PayrollCalculator.money(line.grossPay()
+                        .subtract(line.absentDeduction())
+                        .subtract(deduction)
+                        .add(line.overtimePay()));
+                update.setLong(1, cents(deduction));
+                update.setLong(2, cents(netPay));
+                update.setLong(3, existing.id());
+                update.setString(4, line.employeeNumber());
+                update.addBatch();
+            }
+            update.executeBatch();
+        }
+        return new PayrollReport(existing.id(), existing.periodStart(), existing.periodEnd(), true,
+                existing.computedAt(), payrollLines(connection, existing.id()));
+    }
+
+    private static BigDecimal validateManualDeduction(BigDecimal deduction) {
+        if (deduction == null) return BigDecimal.ZERO.setScale(2);
+        if (deduction.signum() < 0 || deduction.scale() > 2) {
+            throw new IllegalArgumentException("Manual deductions must be non-negative amounts with at most two decimals.");
+        }
+        return PayrollCalculator.money(deduction);
     }
 
     private static PayrollReport finalizedPayroll(Connection connection, LocalDate start, LocalDate end) throws SQLException {
@@ -545,6 +619,20 @@ public final class AttendanceDatabase {
                 if (!row.next()) return null;
                 long id = row.getLong(1);
                 return new PayrollReport(id, start, end, true, Instant.ofEpochMilli(row.getLong(2)), payrollLines(connection, id));
+            }
+        }
+    }
+
+    private static PayrollReport savedPayroll(Connection connection, long id) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT period_start, period_end, finalized_at FROM payroll_runs WHERE id = ?")) {
+            statement.setLong(1, id);
+            try (ResultSet row = statement.executeQuery()) {
+                if (!row.next()) return null;
+                LocalDate start = LocalDate.parse(row.getString(1));
+                LocalDate end = LocalDate.parse(row.getString(2));
+                Instant finalizedAt = Instant.ofEpochMilli(row.getLong(3));
+                return new PayrollReport(id, start, end, true, finalizedAt, payrollLines(connection, id));
             }
         }
     }

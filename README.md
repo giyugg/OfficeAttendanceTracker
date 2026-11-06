@@ -18,7 +18,7 @@ To run an already built application from a terminal:
 java -jar target/attendance-tracker.jar
 ```
 
-The sign-in page has exactly two accounts. `admin` opens Attendance station, Employees, Employee summary, Date summary, Holidays, and Payroll. `attendance` opens only Attendance station. Only the administrator sees **Change passwords**, which can reset either account. New passwords must contain 8–200 characters and are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
+The sign-in page has exactly two accounts. `admin` opens Attendance station, Employees, Employee summary, Date summary, Holidays, Payroll, and Saved payrolls. `attendance` opens only Attendance station. Only the administrator sees **Change passwords**, which can reset either account. New passwords must contain 8–200 characters and are stored in SQLite as individually salted PBKDF2 hashes; plaintext passwords are never stored.
 
 On a new database, the optional `RAM_ADMIN_PASSWORD` and `RAM_ATTENDANCE_PASSWORD` environment variables can replace the initial passwords. After account creation, use **Change passwords**; environment values do not overwrite saved passwords.
 
@@ -65,7 +65,7 @@ Payroll uses a standard 8:00 AM–5:00 PM, Monday–Friday schedule and these ru
 - Paid non-working holidays receive regular daily pay and create no absence. Unpaid non-working holidays create neither pay nor absence. Working a paid holiday does not add a second daily payment; eligible overtime remains separate.
 - Net pay is gross pay minus absent-hour deductions and administrator-entered manual deductions, plus overtime pay.
 
-Payroll previews are live: attendance, daily-pay, holiday, and manual-deduction changes are reflected when recomputed. Finalizing a period stores an immutable calculation snapshot. Opening the same period later returns that snapshot instead of recalculating it.
+Payroll previews in the **Payroll** tab are always live: attendance, daily-pay, holiday, and manual-deduction changes are reflected when recomputed. Finalizing a period saves the dated payroll into the **Saved payrolls** tab, where its calculation snapshot (daily pay, hours, gross pay, absent deductions, and overtime pay) is preserved while manual deductions remain editable and automatically recalculate net pay when updated.
 
 The default display timezone is **Asia/Manila**. All timestamps are stored as UTC epoch milliseconds using the computer's clock. `--zone` accepts Java timezone names such as `Asia/Manila`, `UTC`, or `America/New_York` and changes date filtering and display, without changing stored timestamps.
 
