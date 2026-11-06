@@ -174,6 +174,62 @@ class AttendanceFrameTest {
         }
     }
 
+    @Test void calendarDateChoosersShowDaysOfWeekAndFilterAttendanceWithoutTyping() throws Exception {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "Desktop UI requires a graphical environment");
+        ZoneId zone = ZoneId.of("Asia/Manila");
+        LocalDate tuesday = LocalDate.of(2026, 11, 3);
+        LocalDate monday = LocalDate.of(2026, 11, 2);
+        Clock clock = Clock.fixed(tuesday.atTime(18, 0).atZone(zone).toInstant(), zone);
+        AttendanceDatabase database = new AttendanceDatabase(directory.resolve("datepicker-ui.db"));
+        database.addEmployee("00042", "Maria Santos", 60_000);
+        database.recordScan("00042", monday.atTime(8, 0).atZone(zone).toInstant(), Duration.ZERO);
+        database.recordScan("00042", monday.atTime(17, 0).atZone(zone).toInstant(), Duration.ZERO);
+        AtomicReference<AttendanceFrame> reference = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            AttendanceFrame frame = new AttendanceFrame(database, new AttendanceService(database, clock), zone);
+            frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+            frame.addNotify();
+            frame.validate();
+            reference.set(frame);
+        });
+        AttendanceFrame frame = reference.get();
+        try {
+            List<DatePicker> pickers = onEdt(() -> components(frame, DatePicker.class));
+            assertEquals(6, pickers.size());
+
+            DatePicker dateSummaryPicker = onEdt(() -> pickers.stream()
+                    .filter(picker -> "Attendance date".equals(picker.getToolTipText()))
+                    .findFirst().orElseThrow());
+            assertEquals("2026-11-03 (Tue)  ▾", onEdt(dateSummaryPicker::displayText));
+            assertEquals(List.of("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"), DatePicker.WEEKDAY_HEADERS);
+
+            List<String> popupHeaders = onEdt(() -> components(dateSummaryPicker.popupMenu(), JLabel.class).stream()
+                    .map(JLabel::getText)
+                    .filter(DatePicker.WEEKDAY_HEADERS::contains)
+                    .toList());
+            assertEquals(DatePicker.WEEKDAY_HEADERS, popupHeaders);
+
+            JTable dateSummaryTable = onEdt(() -> components(frame, JTable.class).stream()
+                    .filter(table -> hasColumn(table, "Hours present") && hasColumn(table, "Employee name"))
+                    .findFirst().orElseThrow());
+            await(() -> hasLabel(frame, "2026-11-03 (Tue) · 0 employee(s) · 0 shift(s) · Total present: 0h 00m 00s · Asia/Manila"));
+
+            // Click the Monday Nov 2 button inside the calendar popup instead of typing a date.
+            SwingUtilities.invokeAndWait(() -> {
+                JButton mondayCell = components(dateSummaryPicker.popupMenu(), JButton.class).stream()
+                        .filter(button -> "2026-11-02 (Mon)".equals(button.getToolTipText()))
+                        .findFirst().orElseThrow();
+                mondayCell.doClick();
+            });
+            assertEquals(monday, onEdt(dateSummaryPicker::date));
+            assertEquals("2026-11-02 (Mon)  ▾", onEdt(dateSummaryPicker::displayText));
+            await(() -> dateSummaryTable.getRowCount() == 1
+                    && hasLabel(frame, "2026-11-02 (Mon) · 1 employee(s) · 1 shift(s) · Total present: 9h 00m 00s · Asia/Manila"));
+        } finally {
+            SwingUtilities.invokeAndWait(frame::dispose);
+        }
+    }
+
     private static void submit(JTextField input, String value) throws Exception {
         SwingUtilities.invokeAndWait(() -> { input.setText(value); input.postActionEvent(); });
     }

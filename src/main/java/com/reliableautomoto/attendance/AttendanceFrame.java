@@ -70,12 +70,12 @@ public final class AttendanceFrame extends JFrame {
     private final DefaultTableModel summaryModel = model("Date", "Time ins", "Time outs", "Hours present", "Status");
     private final JTable summaryTable = table(summaryModel);
     private final JComboBox<SummaryEmployeeChoice> summaryEmployee = new JComboBox<>();
-    private final JTextField summaryStart = new JTextField(10);
-    private final JTextField summaryEnd = new JTextField(10);
+    private final DatePicker summaryStart;
+    private final DatePicker summaryEnd;
     private final JLabel summaryStatus = new JLabel("Select an employee to view attendance.");
     private final DefaultTableModel dateSummaryModel = model("Employee #", "Employee name", "Time ins", "Time outs", "Hours present", "Status");
     private final JTable dateSummaryTable = table(dateSummaryModel);
-    private final JTextField dateSummaryDate = new JTextField(10);
+    private final DatePicker dateSummaryDate;
     private final JLabel dateSummaryStatus = new JLabel("Choose a date to view attendance.");
     private final DefaultTableModel holidayModel = model("Date", "Holiday", "Type", "Remarks");
     private final JTable holidayTable = table(holidayModel);
@@ -84,11 +84,11 @@ public final class AttendanceFrame extends JFrame {
         @Override public boolean isCellEditable(int row, int column) { return column == 10; }
     };
     private final JTable payrollTable = table(payrollModel);
-    private final JTextField payrollStart = new JTextField(10);
-    private final JTextField payrollEnd = new JTextField(10);
+    private final DatePicker payrollStart;
+    private final DatePicker payrollEnd;
     private final JLabel payrollStatus = new JLabel("Choose a payroll period.");
     private final JComboBox<String> scope = new JComboBox<>(new String[]{"Today", "Selected date", "All records", "Currently in"});
-    private final JTextField dateInput = new JTextField(10);
+    private final DatePicker dateInput;
     private final JLabel historyCount = new JLabel("No attendance records yet");
     private final JTextField historySearch = new JTextField(16);
     private List<AttendanceRecord> displayedRecords = List.of();
@@ -124,6 +124,13 @@ public final class AttendanceFrame extends JFrame {
         this.onLogout = onLogout;
         this.payrollService = new PayrollService(database, zone, clock);
         this.manualAttendanceService = new ManualAttendanceService(database, zone, clock);
+        LocalDate initialToday = today();
+        this.dateInput = new DatePicker(initialToday, initialToday);
+        this.summaryStart = new DatePicker(initialToday.withDayOfMonth(1), initialToday);
+        this.summaryEnd = new DatePicker(initialToday, initialToday);
+        this.dateSummaryDate = new DatePicker(initialToday, initialToday);
+        this.payrollStart = new DatePicker(initialToday.withDayOfMonth(1), initialToday);
+        this.payrollEnd = new DatePicker(initialToday, initialToday);
         timestampFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy  HH:mm:ss").withZone(zone);
         summaryTimeFormat = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(zone);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
@@ -376,9 +383,8 @@ public final class AttendanceFrame extends JFrame {
         JPanel top = transparent(new BorderLayout(8, 0));
         top.add(label("Attendance history", 17, Font.BOLD, NAVY), BorderLayout.WEST);
         JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-        dateInput.setText(today().toString());
         dateInput.setEnabled(false);
-        dateInput.setToolTipText("YYYY-MM-DD; shifts are selected by their time-in date.");
+        dateInput.setToolTipText("Choose a date; shifts are selected by their time-in date.");
         controls.add(scope);
         controls.add(dateInput);
         JButton apply = new JButton("Refresh");
@@ -453,11 +459,8 @@ public final class AttendanceFrame extends JFrame {
         intro.add(label("Review the selected employee's time-ins, time-outs, and total hours by time-in date.", 13, Font.PLAIN, MUTED));
         top.add(intro, BorderLayout.CENTER);
 
-        LocalDate today = today();
-        summaryStart.setText(today.withDayOfMonth(1).toString());
-        summaryEnd.setText(today.toString());
-        summaryStart.setToolTipText("Start date (YYYY-MM-DD), inclusive");
-        summaryEnd.setToolTipText("End date (YYYY-MM-DD), inclusive");
+        summaryStart.setToolTipText("Start date, inclusive");
+        summaryEnd.setToolTipText("End date, inclusive");
         summaryEmployee.setPrototypeDisplayValue(new SummaryEmployeeChoice("0000000000", "A reasonably long employee name"));
         summaryEmployee.addItem(new SummaryEmployeeChoice(null, "-- SELECT AN EMPLOYEE --"));
 
@@ -505,15 +508,16 @@ public final class AttendanceFrame extends JFrame {
             if (selected != null && item.number().equals(selected.number())) selectedIndex = employee.getItemCount() - 1;
         }
         employee.setSelectedIndex(selectedIndex);
+        LocalDate yesterday = today().minusDays(1);
         LocalDate initialDate = suggestedDate != null && suggestedDate.isBefore(today())
-                ? suggestedDate : today().minusDays(1);
-        JTextField date = new JTextField(initialDate.toString(), 12);
+                ? suggestedDate : yesterday;
+        DatePicker date = new DatePicker(initialDate, today(), yesterday);
         JTextField timeIn = new JTextField("08:00", 8);
         JTextField timeOut = new JTextField("17:00", 8);
         JPanel form = new JPanel(new GridLayout(0, 1, 0, 7));
         form.add(new JLabel("Employee"));
         form.add(employee);
-        form.add(new JLabel("Past attendance date (YYYY-MM-DD)"));
+        form.add(new JLabel("Past attendance date"));
         form.add(date);
         form.add(new JLabel("Time in (HH:mm)"));
         form.add(timeIn);
@@ -523,11 +527,10 @@ public final class AttendanceFrame extends JFrame {
         while (JOptionPane.showConfirmDialog(this, form, "Add past attendance",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
             SummaryEmployeeChoice choice = (SummaryEmployeeChoice) employee.getSelectedItem();
-            LocalDate attendanceDate;
+            LocalDate attendanceDate = date.date();
             LocalTime attendanceTimeIn;
             LocalTime attendanceTimeOut;
             try {
-                attendanceDate = LocalDate.parse(date.getText().strip());
                 attendanceTimeIn = LocalTime.parse(timeIn.getText().strip());
                 attendanceTimeOut = LocalTime.parse(timeOut.getText().strip());
                 if (!attendanceDate.isBefore(today())) {
@@ -537,7 +540,7 @@ public final class AttendanceFrame extends JFrame {
                     throw new IllegalArgumentException("Time-out must be later than time-in on the same date.");
                 }
             } catch (DateTimeParseException error) {
-                JOptionPane.showMessageDialog(this, "Enter the date as YYYY-MM-DD and times as HH:mm.",
+                JOptionPane.showMessageDialog(this, "Enter times as HH:mm.",
                         "Check attendance", JOptionPane.WARNING_MESSAGE);
                 continue;
             } catch (IllegalArgumentException error) {
@@ -549,10 +552,10 @@ public final class AttendanceFrame extends JFrame {
             runDatabase(() -> manualAttendanceService.add(employeeNumber, attendanceDate,
                     attendanceTimeIn, attendanceTimeOut), added -> {
                 selectSummaryEmployee(employeeNumber);
-                dateSummaryDate.setText(attendanceDate.toString());
+                dateSummaryDate.setDate(attendanceDate);
                 refreshData();
                 JOptionPane.showMessageDialog(this, "Past attendance added for " + employeeName + " on "
-                        + attendanceDate + ".");
+                        + DatePicker.formatWithDayOfWeek(attendanceDate) + ".");
             });
             break;
         }
@@ -582,8 +585,7 @@ public final class AttendanceFrame extends JFrame {
                 13, Font.PLAIN, MUTED));
         top.add(intro, BorderLayout.CENTER);
 
-        dateSummaryDate.setText(today().toString());
-        dateSummaryDate.setToolTipText("Attendance date (YYYY-MM-DD)");
+        dateSummaryDate.setToolTipText("Attendance date");
         JPanel filters = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         filters.add(label("Date", 11, Font.PLAIN, MUTED));
         filters.add(dateSummaryDate);
@@ -607,12 +609,8 @@ public final class AttendanceFrame extends JFrame {
     }
 
     private LocalDate selectedPastDate() {
-        try {
-            LocalDate selected = LocalDate.parse(dateSummaryDate.getText().strip());
-            return selected.isBefore(today()) ? selected : today().minusDays(1);
-        } catch (DateTimeParseException error) {
-            return today().minusDays(1);
-        }
+        LocalDate selected = dateSummaryDate.date();
+        return selected.isBefore(today()) ? selected : today().minusDays(1);
     }
 
     private JPanel holidaysPanel() {
@@ -639,7 +637,7 @@ public final class AttendanceFrame extends JFrame {
         top.add(controls, BorderLayout.EAST);
         panel.add(top, BorderLayout.NORTH);
         panel.add(new JScrollPane(holidayTable), BorderLayout.CENTER);
-        panel.add(label("Paid and unpaid non-working holidays do not create absence deductions. Dates use YYYY-MM-DD.",
+        panel.add(label("Paid and unpaid non-working holidays do not create absence deductions.",
                 12, Font.PLAIN, MUTED), BorderLayout.SOUTH);
         return panel;
     }
@@ -652,9 +650,6 @@ public final class AttendanceFrame extends JFrame {
         title.add(label("Edit manual deductions in the table, then recompute or finalize.", 13, Font.PLAIN, MUTED));
         top.add(title, BorderLayout.WEST);
         JPanel controls = transparent(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-        LocalDate today = today();
-        payrollStart.setText(today.withDayOfMonth(1).toString());
-        payrollEnd.setText(today.toString());
         controls.add(new JLabel("From"));
         controls.add(payrollStart);
         controls.add(new JLabel("Through"));
@@ -681,7 +676,7 @@ public final class AttendanceFrame extends JFrame {
 
     private void editHoliday(Holiday holiday) {
         JTextField name = new JTextField(holiday == null ? "" : holiday.name(), 25);
-        JTextField date = new JTextField(holiday == null ? today().toString() : holiday.date().toString(), 12);
+        DatePicker date = new DatePicker(holiday == null ? today() : holiday.date(), today());
         JComboBox<HolidayType> type = new JComboBox<>(HolidayType.values());
         if (holiday != null) type.setSelectedItem(holiday.type());
         JTextArea remarks = new JTextArea(holiday == null ? "" : holiday.remarks(), 3, 25);
@@ -690,7 +685,7 @@ public final class AttendanceFrame extends JFrame {
         JPanel form = new JPanel(new GridLayout(0, 1, 0, 6));
         form.add(new JLabel("Holiday name"));
         form.add(name);
-        form.add(new JLabel("Holiday date (YYYY-MM-DD)"));
+        form.add(new JLabel("Holiday date"));
         form.add(date);
         form.add(new JLabel("Holiday type"));
         form.add(type);
@@ -698,18 +693,11 @@ public final class AttendanceFrame extends JFrame {
         form.add(new JScrollPane(remarks));
         while (JOptionPane.showConfirmDialog(this, form, holiday == null ? "Add holiday" : "Edit holiday",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
-            LocalDate parsed;
-            try {
-                parsed = LocalDate.parse(date.getText().strip());
-                if (name.getText().isBlank()) throw new IllegalArgumentException("Enter a holiday name.");
-            } catch (DateTimeParseException error) {
-                JOptionPane.showMessageDialog(this, "Enter the holiday date as YYYY-MM-DD.", "Check holiday", JOptionPane.WARNING_MESSAGE);
-                continue;
-            } catch (IllegalArgumentException error) {
-                JOptionPane.showMessageDialog(this, error.getMessage(), "Check holiday", JOptionPane.WARNING_MESSAGE);
+            if (name.getText().isBlank()) {
+                JOptionPane.showMessageDialog(this, "Enter a holiday name.", "Check holiday", JOptionPane.WARNING_MESSAGE);
                 continue;
             }
-            LocalDate holidayDate = parsed;
+            LocalDate holidayDate = date.date();
             HolidayType holidayType = (HolidayType) type.getSelectedItem();
             runDatabase(() -> {
                 if (holiday == null) database.addHoliday(name.getText(), holidayDate, holidayType, remarks.getText());
@@ -726,22 +714,15 @@ public final class AttendanceFrame extends JFrame {
             JOptionPane.showMessageDialog(this, "Select a holiday first.");
             return;
         }
-        if (JOptionPane.showConfirmDialog(this, "Delete " + holiday.name() + " on " + holiday.date() + "?",
+        if (JOptionPane.showConfirmDialog(this, "Delete " + holiday.name() + " on " + DatePicker.formatWithDayOfWeek(holiday.date()) + "?",
                 "Delete holiday", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
         runDatabase(() -> { database.deleteHoliday(holiday.id()); return null; }, ignored -> refreshData());
     }
 
     private void computePayroll(boolean finalize) {
         if (payrollTable.isEditing() && !payrollTable.getCellEditor().stopCellEditing()) return;
-        LocalDate start;
-        LocalDate end;
-        try {
-            start = LocalDate.parse(payrollStart.getText().strip());
-            end = LocalDate.parse(payrollEnd.getText().strip());
-        } catch (DateTimeParseException error) {
-            JOptionPane.showMessageDialog(this, "Enter payroll dates as YYYY-MM-DD.", "Check payroll period", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
+        LocalDate start = payrollStart.date();
+        LocalDate end = payrollEnd.date();
         java.util.Map<String, BigDecimal> deductions;
         try {
             deductions = displayedPayroll != null && displayedPayroll.periodStart().equals(start)
@@ -914,14 +895,7 @@ public final class AttendanceFrame extends JFrame {
         if (closing) return;
         int selection = scope.getSelectedIndex();
         LocalDate today = today();
-        LocalDate selectedDate = today;
-        if (selection == 1) {
-            try { selectedDate = LocalDate.parse(dateInput.getText().strip()); }
-            catch (DateTimeParseException error) {
-                historyCount.setText("Enter a valid date: YYYY-MM-DD");
-                return;
-            }
-        }
+        LocalDate selectedDate = selection == 1 ? dateInput.date() : today;
         Instant from = selection <= 1 ? selectedDate.atStartOfDay(zone).toInstant() : null;
         Instant until = selection <= 1 ? selectedDate.plusDays(1).atStartOfDay(zone).toInstant() : null;
         long version = ++refreshVersion;
@@ -940,7 +914,7 @@ public final class AttendanceFrame extends JFrame {
             displayedHolidays = snapshot.holidays();
             holidayModel.setRowCount(0);
             for (Holiday holiday : displayedHolidays) {
-                holidayModel.addRow(new Object[]{holiday.date(), holiday.name(), holiday.type(), holiday.remarks()});
+                holidayModel.addRow(new Object[]{DatePicker.formatWithDayOfWeek(holiday.date()), holiday.name(), holiday.type(), holiday.remarks()});
             }
             attendanceModel.setRowCount(0);
             for (AttendanceRecord record : displayedRecords) {
@@ -986,15 +960,8 @@ public final class AttendanceFrame extends JFrame {
             summaryStatus.setText("Select an employee to view attendance.");
             return;
         }
-        LocalDate start;
-        LocalDate end;
-        try {
-            start = LocalDate.parse(summaryStart.getText().strip());
-            end = LocalDate.parse(summaryEnd.getText().strip());
-        } catch (DateTimeParseException error) {
-            summaryStatus.setText("Enter valid From and To dates in YYYY-MM-DD format.");
-            return;
-        }
+        LocalDate start = summaryStart.date();
+        LocalDate end = summaryEnd.date();
         if (end.isBefore(start)) {
             summaryStatus.setText("The To date must be the same as or later than the From date.");
             return;
@@ -1020,7 +987,7 @@ public final class AttendanceFrame extends JFrame {
                 String timeOuts = summary.shifts().stream()
                         .map(record -> record.timeOut() == null ? "—" : summaryTimeFormat.format(record.timeOut()))
                         .collect(java.util.stream.Collectors.joining(", "));
-                summaryModel.addRow(new Object[]{summary.date(), timeIns, timeOuts, formatDuration(summary.presentDuration()),
+                summaryModel.addRow(new Object[]{DatePicker.formatWithDayOfWeek(summary.date()), timeIns, timeOuts, formatDuration(summary.presentDuration()),
                         summary.inProgress() ? "In progress" : "Complete"});
                 total = total.plus(summary.presentDuration());
                 shifts += summary.shifts().size();
@@ -1034,15 +1001,7 @@ public final class AttendanceFrame extends JFrame {
 
     private void refreshDateSummary() {
         if (role != UserRole.ADMIN || closing) return;
-        LocalDate date;
-        try {
-            date = LocalDate.parse(dateSummaryDate.getText().strip());
-        } catch (DateTimeParseException error) {
-            dateSummaryRefreshVersion++;
-            dateSummaryModel.setRowCount(0);
-            dateSummaryStatus.setText("Enter a valid date in YYYY-MM-DD format.");
-            return;
-        }
+        LocalDate date = dateSummaryDate.date();
         Instant from = date.atStartOfDay(zone).toInstant();
         Instant until = date.plusDays(1).atStartOfDay(zone).toInstant();
         Instant asOf = clock.instant();
@@ -1068,7 +1027,7 @@ public final class AttendanceFrame extends JFrame {
                 shifts += summary.shifts().size();
                 if (summary.inProgress()) openShifts++;
             }
-            dateSummaryStatus.setText(date + " · " + summaries.size() + " employee(s) · " + shifts
+            dateSummaryStatus.setText(DatePicker.formatWithDayOfWeek(date) + " · " + summaries.size() + " employee(s) · " + shifts
                     + " shift(s) · Total present: " + formatDuration(total)
                     + (openShifts == 0 ? "" : " · " + openShifts + " open shift(s)")
                     + " · " + zone);
